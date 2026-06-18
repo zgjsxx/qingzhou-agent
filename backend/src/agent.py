@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from langchain.agents import create_agent
 
+from agent_logging import AgentLoggingMiddleware
 from tools import ALL_TOOLS
 
 LLM_ADAPTER_TYPE = os.getenv("LLM_ADAPTER_TYPE", "anthropic").strip()
@@ -38,6 +39,7 @@ configure_llm_provider_env()
 graph = create_agent(
     model=f"{LLM_ADAPTER_TYPE}:{LLM_MODEL}",
     tools=ALL_TOOLS,
+    middleware=[AgentLoggingMiddleware()],
     system_prompt=(
         "你是一个有用的个人AI助手。你可以使用工具来帮助用户完成任务。请用中文回复，除非用户明确要求使用其他语言。\n"
         "在调用任何工具之前，你必须先用简短的文字告诉用户你打算做什么，例如：'我来帮你查一下北京的天气'、'让我计算一下这个表达式'。"
