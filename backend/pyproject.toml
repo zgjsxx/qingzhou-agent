@@ -1,0 +1,15 @@
+[project]
+name = "xu-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain-anthropic>=0.3",
+    "langgraph>=0.4",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
