@@ -1,57 +1,57 @@
-# xu-agent Agent Notes
+# xu-agent 智能体说明
 
-## Overview
+## 概览
 
-`xu-agent` is a LangGraph-based personal assistant.
+`xu-agent` 是一个基于 LangGraph 的个人 AI 助手。
 
-- Backend graph entry: `backend/src/agent.py`
-- Tool definitions: `backend/src/tools.py`
-- Agent interaction logging: `backend/src/agent_logging.py`
-- LangGraph dev config: `backend/langgraph.json`
-- Frontend chat UI: `frontend/src`
+- 后端图入口：`backend/src/agent.py`
+- 工具定义：`backend/src/tools.py`
+- 智能体交互日志：`backend/src/agent_logging.py`
+- LangGraph 开发配置：`backend/langgraph.json`
+- 前端聊天界面：`frontend/src`
 
-The backend exposes the graph named `agent` through LangGraph Server on
-`http://localhost:2024`. The frontend connects to it from the Next.js app on
-`http://localhost:3000`.
+后端通过 LangGraph Server 暴露名为 `agent` 的图，地址为
+`http://localhost:2024`。前端 Next.js 应用从 `http://localhost:3000`
+连接后端。
 
-## Model Configuration
+## 模型配置
 
-The model is configured from backend environment variables:
+模型通过后端环境变量配置：
 
-- `LLM_ADAPTER_TYPE`: provider prefix, for example `anthropic` or `openai`
-- `LLM_MODEL`: model name, for example `glm-5.1`
-- `LLM_API_KEY`: API key
-- `LLM_BASE_URL`: provider base URL
+- `LLM_ADAPTER_TYPE`：模型供应商前缀，例如 `anthropic` 或 `openai`
+- `LLM_MODEL`：模型名称，例如 `glm-5.1`
+- `LLM_API_KEY`：API 密钥
+- `LLM_BASE_URL`：供应商基础 URL
 
-`backend/src/agent.py` maps the project-level `LLM_*` variables to the
-provider-specific variables that LangChain expects:
+`backend/src/agent.py` 会把项目级的 `LLM_*` 变量映射为 LangChain 期望的
+供应商专用环境变量：
 
-- `anthropic` -> `ANTHROPIC_API_KEY`, `ANTHROPIC_API_URL`
-- `openai` -> `OPENAI_API_KEY`, `OPENAI_BASE_URL`
+- `anthropic` -> `ANTHROPIC_API_KEY`、`ANTHROPIC_API_URL`
+- `openai` -> `OPENAI_API_KEY`、`OPENAI_BASE_URL`
 
-The final model string is built as:
+最终模型字符串按下面的格式生成：
 
 ```text
 {LLM_ADAPTER_TYPE}:{LLM_MODEL}
 ```
 
-## Tools
+## 工具
 
-The current tool list is defined by `ALL_TOOLS` in `backend/src/tools.py`.
+当前工具列表由 `backend/src/tools.py` 中的 `ALL_TOOLS` 定义。
 
 ### `get_system_cpu_usage`
 
-Returns the host's total CPU usage percentage.
+返回宿主机整体 CPU 使用率百分比。
 
-- Windows: tries `typeperf` first, then PowerShell `Get-Counter`
-- Linux-like systems: samples `/proc/stat`
-- Sampling interval is clamped to `1..10` seconds
+- Windows：优先尝试 `typeperf`，然后回退到 PowerShell `Get-Counter`
+- Linux 类系统：读取 `/proc/stat` 采样
+- 采样间隔限制在 `1..10` 秒
 
 ### `run_shell_command`
 
-Runs a shell command on the backend host.
+在后端宿主机上运行 shell 命令。
 
-Supported shells:
+支持的 shell：
 
 - `auto`
 - `powershell`
@@ -59,25 +59,32 @@ Supported shells:
 - `bash`
 - `sh`
 
-Important behavior:
+重要行为：
 
-- Default timeout is 30 seconds.
-- Timeout is clamped to `1..120` seconds.
-- Timed-out commands kill the process tree.
-- Output is decoded as UTF-8 with replacement for invalid bytes.
-- Output is truncated by `SHELL_TOOL_MAX_OUTPUT_CHARS`.
-- Broad recursive scans from drive roots are blocked, for example
-  `Get-ChildItem D:\ -Recurse` or `dir D:\ /s`.
+- 默认超时时间为 30 秒。
+- 超时时间限制在 `1..120` 秒。
+- 命令超时后会终止对应进程树。
+- 输出按 UTF-8 解码，遇到非法字节会用替代字符处理。
+- 输出会按 `SHELL_TOOL_MAX_OUTPUT_CHARS` 截断。
+- 禁止从磁盘根目录发起大范围递归扫描，例如
+  `Get-ChildItem D:\ -Recurse` 或 `dir D:\ /s`。
 
-## Logging
+## 日志
 
-`AgentLoggingMiddleware` writes JSONL logs to:
+`AgentLoggingMiddleware` 用来把智能体、模型和工具交互写入 JSONL 日志。
+日志默认关闭；调试时可在后端 `.env` 中开启：
+
+```env
+AGENT_LOG_ENABLED=true
+```
+
+开启后默认写入：
 
 ```text
 backend/logs/agent.jsonl
 ```
 
-Logged events include:
+记录的事件包括：
 
 - `agent.start`
 - `agent.end`
@@ -88,71 +95,101 @@ Logged events include:
 - `tool.end`
 - `tool.error`
 
-Environment variables:
+相关环境变量：
 
+- `AGENT_LOG_ENABLED`：设为 `true` 时启用 JSONL 日志
 - `AGENT_LOG_DIR`
 - `AGENT_LOG_MAX_BYTES`
 - `AGENT_LOG_BACKUP_COUNT`
 
-The `backend/logs/` directory is ignored by git.
+`backend/logs/` 目录已被 git 忽略。
 
-## Frontend Streaming
+## 前端流式输出
 
-The frontend uses `@langchain/langgraph-sdk/react`.
+前端使用 `@langchain/langgraph-sdk/react`。
 
-Current submissions set:
+当前提交请求时设置：
 
 ```ts
 streamResumable: false
 ```
 
-This is intentional. Earlier, resumable streams caused unfinished old runs to
-resume after restarting the backend, which made the system execute previous
-tasks automatically.
+这是有意为之。之前启用可恢复流时，重启后端后未完成的旧 run 可能会继续恢复，
+导致系统自动执行之前的任务。
 
-The frontend still stores the active `threadId` in the URL. If the browser URL
-contains `threadId=...`, the UI will reconnect to that thread and fetch its
-state history.
+前端仍会把当前 `threadId` 存在 URL 中。如果浏览器 URL 包含
+`threadId=...`，UI 会重新连接到该线程并拉取状态历史。
 
-## LangGraph Dev Persistence
+## LangGraph 开发态持久化
 
-LangGraph dev stores local state in:
+LangGraph dev 会把本地状态存储在：
 
 ```text
 backend/.langgraph_api/
 ```
 
-Important files include:
+重要文件包括：
 
 - `.langgraph_ops.pckl`
 - `.langgraph_checkpoint.*.pckl`
 - `.langgraph_retry_counter.pckl`
 
-If old tasks run again after restarting the backend, inspect this directory.
-It may contain `running` runs from previous sessions.
+如果重启后端后旧任务又开始执行，可以检查这个目录。里面可能还保存着上一次会话中
+处于 `running` 状态的 run。
 
-To reset local LangGraph dev state:
+重置本地 LangGraph dev 状态：
 
-1. Stop the backend process.
-2. Move `backend/.langgraph_api/` to a backup location or delete it.
-3. Remove `threadId=...` from the browser URL or start a new chat.
-4. Restart the backend.
+1. 停止后端进程。
+2. 将 `backend/.langgraph_api/` 移到备份位置，或删除它。
+3. 从浏览器 URL 中移除 `threadId=...`，或开启一个新聊天。
+4. 重启后端。
 
-Prefer moving the directory first, for example:
+更推荐先移动目录做备份，例如：
 
 ```powershell
 Move-Item backend\.langgraph_api backend\.langgraph_api.backup
 ```
 
-## Operational Notes
+## Git 提交规范
 
-- `Ctrl+C` may stop the LangGraph wrapper but leave worker/tool child processes.
-- If the backend appears stuck, check:
-  - port `2024`
+提交信息建议使用简洁的 Conventional Commits 风格：
+
+```text
+<type>(<scope>): <subject>
+```
+
+常用 `type`：
+
+- `feat`：新增功能
+- `fix`：修复问题
+- `docs`：文档变更
+- `refactor`：不改变行为的代码重构
+- `test`：测试相关变更
+- `chore`：构建、依赖、配置等杂项
+
+规范建议：
+
+- `subject` 使用一句简短描述，说明“做了什么”。
+- scope 可选，用来标明影响范围，例如 `backend`、`frontend`、`agent`。
+- 一次提交只包含一类清晰变更，避免把无关修改混在一起。
+- 如果有破坏性变更，在提交正文中写明影响和迁移方式。
+
+示例：
+
+```text
+feat(agent): add opt-in interaction logging
+fix(tools): clamp shell command timeout
+docs(agent): document git commit convention
+```
+
+## 运维提示
+
+- `Ctrl+C` 可能只停止 LangGraph 包装进程，而留下 worker 或工具子进程。
+- 如果后端看起来卡住了，可以检查：
+  - 端口 `2024`
   - `langgraph.exe`
-  - `python.exe` from the `lcchat` environment
-  - high-CPU `powershell.exe`, `cmd.exe`, or `Robocopy.exe`
-- The most useful debug file is `backend/logs/agent.jsonl`.
-- If `agent.jsonl` shows a `tool.start` without a matching `tool.end`, the
-  current run is waiting on that tool.
-
+  - `lcchat` 环境中的 `python.exe`
+  - 高 CPU 占用的 `powershell.exe`、`cmd.exe` 或 `Robocopy.exe`
+- 调试时最有用的文件是 `backend/logs/agent.jsonl`。
+- 如果 `agent.jsonl` 中出现 `tool.start` 但没有对应的 `tool.end`，
+  通常表示当前 run 正在等待该工具返回。

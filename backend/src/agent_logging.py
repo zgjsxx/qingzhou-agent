@@ -25,6 +25,20 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    """Parse common .env boolean values while keeping missing values explicit."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def is_agent_logging_enabled() -> bool:
+    """Return whether verbose agent interaction logging is enabled."""
+    return _bool_env("AGENT_LOG_ENABLED", False)
+
+
 def _log_dir() -> Path:
     configured = Path(os.getenv("AGENT_LOG_DIR", "logs"))
     if configured.is_absolute():
@@ -58,7 +72,8 @@ def _build_logger() -> logging.Logger:
     return logger
 
 
-LOGGER = _build_logger()
+# Do not create the logs directory or file handler unless logging is explicitly enabled.
+LOGGER = _build_logger() if is_agent_logging_enabled() else logging.getLogger("xu_agent.disabled")
 
 
 def _now() -> str:
@@ -99,6 +114,10 @@ def _state_messages(state: Any) -> list[Any]:
 
 
 def log_event(event: str, **payload: Any) -> None:
+    # Guard direct calls too, in case this module is used without the middleware.
+    if not is_agent_logging_enabled():
+        return
+
     LOGGER.info(
         json.dumps(
             {
