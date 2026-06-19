@@ -25,3 +25,7 @@ build/
 
 # LangGraph dev server cache
 .langgraph_api/
+
+# Agent runtime outputs
+.transcripts/
+.agent_outputs/

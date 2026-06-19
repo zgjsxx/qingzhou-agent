@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from langchain.agents import create_agent
 
+from agent_context import AgentContextCompactMiddleware
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent_permissions import AgentPermissionMiddleware
 from skills import skill_catalog_for_prompt
@@ -40,7 +41,7 @@ configure_llm_provider_env()
 
 SKILL_CATALOG = skill_catalog_for_prompt()
 
-middleware = [AgentPermissionMiddleware()]
+middleware = [AgentContextCompactMiddleware(), AgentPermissionMiddleware()]
 
 # Keep interaction logging opt-in so normal chat requests do not create JSONL files.
 if is_agent_logging_enabled():

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from langchain.tools import tool
 
+from agent_context import MANUAL_COMPACT_MARKER
 from skills import load_skill_content
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -378,6 +379,17 @@ def load_skill(name: str) -> str:
 
 
 @tool
+def compact(focus: str = "") -> str:
+    """Summarize and compact earlier conversation context before continuing.
+
+    Args:
+        focus: Optional note about what details the summary should preserve.
+    """
+    note = f"\nFocus: {focus.strip()}" if focus and focus.strip() else ""
+    return f"{MANUAL_COMPACT_MARKER} Conversation compaction will run before the next model step.{note}"
+
+
+@tool
 def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
     """Read a UTF-8 text file from the working directory.
 
@@ -570,6 +582,7 @@ ALL_TOOLS = [
     get_system_cpu_usage,
     todo_write,
     load_skill,
+    compact,
     read_file,
     write_file,
     edit_file,
