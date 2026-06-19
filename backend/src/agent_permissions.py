@@ -26,15 +26,15 @@ class PermissionDecision:
 
 
 SHELL_DENY_PATTERNS = [
-    ("rm -rf /", "Refusing to remove the filesystem root."),
-    ("sudo", "Refusing privileged sudo execution."),
-    ("shutdown", "Refusing system shutdown."),
-    ("reboot", "Refusing system reboot."),
-    ("mkfs", "Refusing filesystem formatting."),
-    ("diskpart", "Refusing disk partitioning."),
-    ("format ", "Refusing disk formatting."),
-    ("dd if=", "Refusing raw disk writes."),
-    ("> /dev/sda", "Refusing writes to a raw disk device."),
+    (r"\brm\s+-rf\s+/", "Refusing to remove the filesystem root."),
+    (r"(^|[;&|]\s*)sudo\b", "Refusing privileged sudo execution."),
+    (r"(^|[;&|]\s*)shutdown\b", "Refusing system shutdown."),
+    (r"(^|[;&|]\s*)reboot\b", "Refusing system reboot."),
+    (r"(^|[;&|]\s*)mkfs(?:\.\w+)?\b", "Refusing filesystem formatting."),
+    (r"(^|[;&|]\s*)diskpart\b", "Refusing disk partitioning."),
+    (r"(^|[;&|]\s*|cmd(?:\.exe)?\s+/[ck]\s+)format(?:\.com|\.exe)?\b", "Refusing disk formatting."),
+    (r"(^|[;&|]\s*)dd\b.*\bif=", "Refusing raw disk writes."),
+    (r">\s*/dev/sda\b", "Refusing writes to a raw disk device."),
 ]
 
 SHELL_ASK_PATTERNS = [
@@ -168,7 +168,7 @@ def _path_escapes_root(path: str, cwd: str = "") -> bool:
 def _check_shell_deny_list(command: str) -> PermissionDecision:
     normalized = command.strip().lower()
     for pattern, reason in SHELL_DENY_PATTERNS:
-        if pattern in normalized:
+        if re.search(pattern, normalized):
             return PermissionDecision("deny", reason)
 
     return PermissionDecision("allow")

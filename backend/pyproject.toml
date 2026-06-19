@@ -4,7 +4,10 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "langchain-anthropic>=0.3",
+    "langchain>=1.0",
+    "langchain-openai>=0.3",
     "langgraph>=0.4",
+    "langgraph-cli[inmem]>=0.2",
 ]
 
 [build-system]
