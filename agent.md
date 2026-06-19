@@ -47,6 +47,24 @@
 - Linux 类系统：读取 `/proc/stat` 采样
 - 采样间隔限制在 `1..10` 秒
 
+### `todo_write`
+
+维护当前 thread/session 的任务清单，用于多步骤任务的计划和进度同步。
+
+- 输入是完整 todo 列表，而不是增量变更。
+- 每个 todo 项包含：
+  - `content`：任务内容
+  - `status`：任务状态，只能是 `pending`、`in_progress` 或 `completed`
+- 状态保存在当前后端进程内，按 thread/session 隔离。
+- 后端重启后 todo 状态会清空。
+- 该工具只记录计划和进度，不会执行实际文件、命令或网络操作。
+
+使用原则：
+
+- 多步骤任务、代码修改、问题排查、方案比较或长时间跟进任务，应先调用 `todo_write` 建立清单。
+- 每完成一个阶段或切换当前重点时，应再次调用 `todo_write` 更新状态。
+- 简单问答或一次性工具调用不需要使用 `todo_write`。
+
 ### `run_shell_command`
 
 在后端宿主机上运行 shell 命令。
@@ -142,6 +160,44 @@ backend/logs/agent.jsonl
 - `AGENT_LOG_BACKUP_COUNT`
 
 `backend/logs/` 目录已被 git 忽略。
+
+## 权限
+
+工具调用在真正执行前会先经过 `AgentPermissionMiddleware`。权限管线分三类结果：
+
+- `allow`：允许执行。
+- `deny`：直接拒绝，不执行工具。
+- `ask`：需要用户审批。
+
+`ask` 会通过 LangGraph `interrupt()` 暂停当前 run，并交给前端 Agent Inbox
+审批界面处理。用户点击批准后，原工具调用会继续执行；用户拒绝后，工具不会执行，
+并把 `Permission denied` 结果返回给模型。
+
+同一个后端进程内，同一个 thread/session 已经批准过的完全相同工具调用会被缓存。
+后续相同的 `tool name + args` 会直接放行，不再重复弹审批。后端重启后缓存清空。
+
+硬拒绝规则主要用于永远不应该执行的 shell 操作，例如：
+
+- `rm -rf /`
+- `sudo`
+- `shutdown`
+- `reboot`
+- `mkfs`
+- `diskpart`
+- `format`
+- `dd if=`
+
+需要审批的规则包括：
+
+- `run_shell_command` 中的删除类命令，例如 `rm`、`del`、`Remove-Item`
+- 危险权限变更，例如 `chmod 777`
+- 写入系统配置路径，例如 `/etc/`
+- `write_file` 或 `edit_file` 试图写出工作目录
+
+可选环境变量：
+
+- `AGENT_PERMISSION_ALLOW_ASK_RULES`：设为 `true` 时跳过交互审批并允许 ask 规则继续执行。
+  默认是 `false`，更适合日常使用。
 
 ## 前端流式输出
 

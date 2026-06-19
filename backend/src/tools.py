@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import time
 import glob as glob_module
+import threading
+from contextvars import ContextVar
 from pathlib import Path
 
 from langchain.tools import tool
@@ -16,6 +18,24 @@ from langchain.tools import tool
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_OUTPUT_CHARS = 12000
+TODO_STATUSES = {"pending", "in_progress", "completed"}
+DEFAULT_TODO_THREAD_ID = "__default__"
+CURRENT_TOOL_THREAD_ID: ContextVar[str] = ContextVar(
+    "CURRENT_TOOL_THREAD_ID",
+    default=DEFAULT_TODO_THREAD_ID,
+)
+THREAD_TODOS: dict[str, list[dict[str, str]]] = {}
+THREAD_TODOS_LOCK = threading.Lock()
+
+
+def set_current_tool_thread_id(thread_id: str | None):
+    """Set the current tool thread id for tools that keep per-thread state."""
+    return CURRENT_TOOL_THREAD_ID.set(thread_id or DEFAULT_TODO_THREAD_ID)
+
+
+def reset_current_tool_thread_id(token) -> None:
+    """Restore the previous tool thread id after a tool call completes."""
+    CURRENT_TOOL_THREAD_ID.reset(token)
 
 
 def _resolve_cwd(cwd: str) -> str:
@@ -107,6 +127,44 @@ def _parse_optional_positive_int(value: int | None, default: int, minimum: int =
     except (TypeError, ValueError):
         parsed = default
     return max(parsed, minimum)
+
+
+def _format_todos(todos: list[dict[str, str]]) -> str:
+    if not todos:
+        return "(empty todo list)"
+
+    labels = {
+        "pending": "[ ]",
+        "in_progress": "[~]",
+        "completed": "[x]",
+    }
+    return "\n".join(
+        f"{index}. {labels[item['status']]} {item['content']} ({item['status']})"
+        for index, item in enumerate(todos, start=1)
+    )
+
+
+def _normalize_todos(todos: object) -> list[dict[str, str]]:
+    if not isinstance(todos, list):
+        raise ValueError("todos must be a list.")
+
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(todos, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"todo #{index} must be an object.")
+
+        content = str(item.get("content", "")).strip()
+        status = str(item.get("status", "")).strip()
+        if not content:
+            raise ValueError(f"todo #{index} content must not be empty.")
+        if status not in TODO_STATUSES:
+            raise ValueError(
+                f"todo #{index} status must be one of: pending, in_progress, completed."
+            )
+
+        normalized.append({"content": content, "status": status})
+
+    return normalized
 
 
 def _run_process(argv: list[str], timeout: int = 10) -> subprocess.CompletedProcess[str]:
@@ -275,6 +333,36 @@ def get_system_cpu_usage(sample_seconds: int = 1) -> str:
                 return f"当前系统 CPU 占用约为 {cpu:.1f}%。"
 
     return "Error: unable to read CPU usage from /proc/stat."
+
+
+@tool
+def todo_write(todos: list[dict[str, str]]) -> str:
+    """Replace the current thread's todo list for multi-step work.
+
+    Args:
+        todos: Full todo list. Each item needs content and status, where status is
+            pending, in_progress, or completed.
+    """
+    try:
+        normalized = _normalize_todos(todos)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    thread_id = CURRENT_TOOL_THREAD_ID.get()
+    with THREAD_TODOS_LOCK:
+        THREAD_TODOS[thread_id] = normalized
+
+    total = len(normalized)
+    completed = sum(1 for item in normalized if item["status"] == "completed")
+    in_progress = sum(1 for item in normalized if item["status"] == "in_progress")
+    pending = sum(1 for item in normalized if item["status"] == "pending")
+
+    return (
+        "Todo list updated.\n"
+        f"thread: {thread_id}\n"
+        f"summary: {completed} completed, {in_progress} in_progress, {pending} pending, {total} total\n\n"
+        f"{_format_todos(normalized)}"
+    )
 
 
 @tool
@@ -466,4 +554,12 @@ def run_shell_command(
     return _truncate(output, max_output_chars)
 
 
-ALL_TOOLS = [get_system_cpu_usage, read_file, write_file, edit_file, glob_files, run_shell_command]
+ALL_TOOLS = [
+    get_system_cpu_usage,
+    todo_write,
+    read_file,
+    write_file,
+    edit_file,
+    glob_files,
+    run_shell_command,
+]

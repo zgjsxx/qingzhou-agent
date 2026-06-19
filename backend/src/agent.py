@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from langchain.agents import create_agent
 
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
+from agent_permissions import AgentPermissionMiddleware
 from tools import ALL_TOOLS
 
 LLM_ADAPTER_TYPE = os.getenv("LLM_ADAPTER_TYPE", "anthropic").strip()
@@ -36,8 +37,11 @@ def configure_llm_provider_env() -> None:
 
 configure_llm_provider_env()
 
+middleware = [AgentPermissionMiddleware()]
+
 # Keep interaction logging opt-in so normal chat requests do not create JSONL files.
-middleware = [AgentLoggingMiddleware()] if is_agent_logging_enabled() else []
+if is_agent_logging_enabled():
+    middleware.append(AgentLoggingMiddleware())
 
 graph = create_agent(
     model=f"{LLM_ADAPTER_TYPE}:{LLM_MODEL}",
@@ -45,6 +49,9 @@ graph = create_agent(
     middleware=middleware,
     system_prompt=(
         "你是一个有用的个人AI助手。你可以使用工具来帮助用户完成任务。请用中文回复，除非用户明确要求使用其他语言。\n"
-        "在调用任何工具之前，你必须先用简短的文字告诉用户你打算做什么，例如：'我来帮你查一下北京的天气'、'让我计算一下这个表达式'。"
+        "在调用任何工具之前，你必须先用简短的文字告诉用户你打算做什么，例如：'我来帮你查一下北京的天气'、'让我计算一下这个表达式'。\n"
+        "当任务包含多个步骤、需要修改代码、排查问题、比较方案或持续跟进进度时，请先调用 todo_write 写出简短任务清单。"
+        "执行过程中每完成一个阶段或切换当前重点时，应再次调用 todo_write 更新状态。"
+        "todo 状态只能使用 pending、in_progress、completed。简单问答或一次性工具调用不需要使用 todo_write。"
     ),
 )
