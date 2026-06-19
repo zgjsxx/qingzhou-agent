@@ -32,7 +32,7 @@ SHELL_DENY_PATTERNS = [
     (r"(^|[;&|]\s*)reboot\b", "Refusing system reboot."),
     (r"(^|[;&|]\s*)mkfs(?:\.\w+)?\b", "Refusing filesystem formatting."),
     (r"(^|[;&|]\s*)diskpart\b", "Refusing disk partitioning."),
-    (r"(^|[;&|]\s*|cmd(?:\.exe)?\s+/[ck]\s+)format(?:\.com|\.exe)?\b", "Refusing disk formatting."),
+    (r"(^|[;&|]\s*|cmd(?:\.exe)?\s+/[ck]\s+)format(?:\.com|\.exe)?(?=$|\s)", "Refusing disk formatting."),
     (r"(^|[;&|]\s*)dd\b.*\bif=", "Refusing raw disk writes."),
     (r">\s*/dev/sda\b", "Refusing writes to a raw disk device."),
 ]
