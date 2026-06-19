@@ -8,6 +8,7 @@ import signal
 import shutil
 import subprocess
 import time
+import glob as glob_module
 from pathlib import Path
 
 from langchain.tools import tool
@@ -27,6 +28,24 @@ def _resolve_cwd(cwd: str) -> str:
     if not resolved.is_dir():
         raise ValueError(f"Working directory is not a directory: {resolved}")
     return str(resolved)
+
+
+def _resolve_safe_path(path: str, cwd: str = "") -> tuple[Path, Path]:
+    if not path or not path.strip():
+        raise ValueError("Path must not be empty.")
+
+    root = Path(_resolve_cwd(cwd)).resolve()
+    requested = Path(path).expanduser()
+    resolved = (root / requested).resolve() if not requested.is_absolute() else requested.resolve()
+
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"Path escapes working directory: {path}")
+
+    return root, resolved
+
+
+def _relative_to_root(path: Path, root: Path) -> str:
+    return str(path.relative_to(root)).replace("\\", "/")
 
 
 def _select_shell(shell: str) -> tuple[str, list[str]]:
@@ -80,6 +99,14 @@ def _is_broad_recursive_scan(command: str) -> bool:
     if re.search(rf"for\s+/d\s+%[a-z]\s+in\s+\(['\"]?[a-z]:\\\*", normalized) and "dir /s" in normalized:
         return True
     return False
+
+
+def _parse_optional_positive_int(value: int | None, default: int, minimum: int = 1) -> int:
+    try:
+        parsed = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, minimum)
 
 
 def _run_process(argv: list[str], timeout: int = 10) -> subprocess.CompletedProcess[str]:
@@ -251,6 +278,123 @@ def get_system_cpu_usage(sample_seconds: int = 1) -> str:
 
 
 @tool
+def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
+    """Read a UTF-8 text file from the working directory.
+
+    Args:
+        path: File path to read. Relative paths are resolved under cwd.
+        cwd: Optional working directory. Empty means the backend process working directory.
+        limit: Optional maximum number of lines to return.
+    """
+    try:
+        root, file_path = _resolve_safe_path(path, cwd)
+        if not file_path.exists():
+            return f"Error: file does not exist: {_relative_to_root(file_path, root)}"
+        if not file_path.is_file():
+            return f"Error: path is not a file: {_relative_to_root(file_path, root)}"
+
+        lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if limit is not None:
+            max_lines = _parse_optional_positive_int(limit, len(lines))
+            if len(lines) > max_lines:
+                omitted = len(lines) - max_lines
+                lines = [*lines[:max_lines], f"... ({omitted} more lines)"]
+
+        return "\n".join(lines)
+    except OSError as exc:
+        return f"Error: failed to read file: {exc}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+
+@tool
+def write_file(path: str, content: str, cwd: str = "") -> str:
+    """Write UTF-8 text to a file inside the working directory.
+
+    Args:
+        path: File path to write. Relative paths are resolved under cwd.
+        content: Text content to write.
+        cwd: Optional working directory. Empty means the backend process working directory.
+    """
+    try:
+        root, file_path = _resolve_safe_path(path, cwd)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+        return f"Wrote {len(content.encode('utf-8'))} bytes to {_relative_to_root(file_path, root)}"
+    except OSError as exc:
+        return f"Error: failed to write file: {exc}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+
+@tool
+def edit_file(path: str, old_text: str, new_text: str, cwd: str = "") -> str:
+    """Replace the first exact text match in a UTF-8 file.
+
+    Args:
+        path: File path to edit. Relative paths are resolved under cwd.
+        old_text: Exact text to replace once.
+        new_text: Replacement text.
+        cwd: Optional working directory. Empty means the backend process working directory.
+    """
+    if old_text == "":
+        return "Error: old_text must not be empty."
+
+    try:
+        root, file_path = _resolve_safe_path(path, cwd)
+        if not file_path.exists():
+            return f"Error: file does not exist: {_relative_to_root(file_path, root)}"
+        if not file_path.is_file():
+            return f"Error: path is not a file: {_relative_to_root(file_path, root)}"
+
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+        if old_text not in text:
+            return f"Error: text not found in {_relative_to_root(file_path, root)}"
+
+        file_path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
+        return f"Edited {_relative_to_root(file_path, root)}"
+    except OSError as exc:
+        return f"Error: failed to edit file: {exc}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+
+@tool("glob")
+def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
+    """Find files by glob pattern inside the working directory.
+
+    Args:
+        pattern: Glob pattern, for example **/*.py or backend/src/*.py.
+        cwd: Optional working directory. Empty means the backend process working directory.
+        limit: Maximum number of matches to return.
+    """
+    if not pattern or not pattern.strip():
+        return "Error: pattern must not be empty."
+
+    try:
+        root = Path(_resolve_cwd(cwd)).resolve()
+        max_matches = _parse_optional_positive_int(limit, 200)
+        matches: list[str] = []
+        for match in glob_module.glob(pattern, root_dir=root, recursive=True):
+            resolved = (root / match).resolve()
+            if resolved.is_relative_to(root):
+                matches.append(_relative_to_root(resolved, root))
+
+        matches = sorted(dict.fromkeys(matches))
+        if not matches:
+            return "(no matches)"
+        if len(matches) > max_matches:
+            omitted = len(matches) - max_matches
+            matches = [*matches[:max_matches], f"... ({omitted} more matches)"]
+
+        return "\n".join(matches)
+    except OSError as exc:
+        return f"Error: failed to glob files: {exc}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+
+@tool
 def run_shell_command(
     command: str,
     cwd: str = "",
@@ -322,4 +466,4 @@ def run_shell_command(
     return _truncate(output, max_output_chars)
 
 
-ALL_TOOLS = [get_system_cpu_usage, run_shell_command]
+ALL_TOOLS = [get_system_cpu_usage, read_file, write_file, edit_file, glob_files, run_shell_command]
