@@ -15,6 +15,8 @@ from pathlib import Path
 
 from langchain.tools import tool
 
+from skills import load_skill_content
+
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_OUTPUT_CHARS = 12000
@@ -366,6 +368,16 @@ def todo_write(todos: list[dict[str, str]]) -> str:
 
 
 @tool
+def load_skill(name: str) -> str:
+    """Load the full content of a registered project skill on demand.
+
+    Args:
+        name: Skill registry name from the skill catalog.
+    """
+    return load_skill_content(name)
+
+
+@tool
 def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
     """Read a UTF-8 text file from the working directory.
 
@@ -557,6 +569,7 @@ def run_shell_command(
 ALL_TOOLS = [
     get_system_cpu_usage,
     todo_write,
+    load_skill,
     read_file,
     write_file,
     edit_file,

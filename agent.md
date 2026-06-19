@@ -65,6 +65,21 @@
 - 每完成一个阶段或切换当前重点时，应再次调用 `todo_write` 更新状态。
 - 简单问答或一次性工具调用不需要使用 `todo_write`。
 
+### `load_skill`
+
+按名称动态加载项目技能的完整说明。
+
+- 启动时后端只扫描 `skills/*/SKILL.md` 的元信息，并把技能目录注入 system prompt。
+- system prompt 中只包含技能名称和简短描述，不包含完整 `SKILL.md` 内容。
+- 当模型判断需要某个技能时，调用 `load_skill(name)` 获取完整内容。
+- `load_skill` 只能按已注册的技能名称查找，不能传入任意文件路径。
+- 技能内容作为工具结果进入当前对话上下文，后续模型可按其中说明继续工作。
+
+当前内置项目技能示例：
+
+- `code-review`：用于代码审查。
+- `xu-agent-development`：用于开发和维护本项目 agent 能力。
+
 ### `run_shell_command`
 
 在后端宿主机上运行 shell 命令。
@@ -160,6 +175,41 @@ backend/logs/agent.jsonl
 - `AGENT_LOG_BACKUP_COUNT`
 
 `backend/logs/` 目录已被 git 忽略。
+
+## 技能加载
+
+技能目录位于项目根目录：
+
+```text
+skills/
+  code-review/SKILL.md
+  xu-agent-development/SKILL.md
+```
+
+每个 `SKILL.md` 可以包含简单 YAML frontmatter：
+
+```markdown
+---
+name: code-review
+description: 用于审查代码变更，优先发现 bug、回归风险、权限/安全问题和缺失测试。
+---
+
+# Code Review Skill
+...
+```
+
+后端启动时，`backend/src/skills.py` 会扫描技能目录并建立 registry。registry 只保存：
+
+- `name`
+- `description`
+- `SKILL.md` 路径
+
+完整技能内容不会在启动时注入 system prompt。只有当 agent 调用 `load_skill(name)` 时，
+后端才会读取对应 `SKILL.md` 并作为工具结果返回。
+
+可选环境变量：
+
+- `AGENT_SKILLS_DIR`：自定义技能目录。相对路径会按项目根目录解析。
 
 ## 权限
 

@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent_permissions import AgentPermissionMiddleware
+from skills import skill_catalog_for_prompt
 from tools import ALL_TOOLS
 
 LLM_ADAPTER_TYPE = os.getenv("LLM_ADAPTER_TYPE", "anthropic").strip()
@@ -37,6 +38,8 @@ def configure_llm_provider_env() -> None:
 
 configure_llm_provider_env()
 
+SKILL_CATALOG = skill_catalog_for_prompt()
+
 middleware = [AgentPermissionMiddleware()]
 
 # Keep interaction logging opt-in so normal chat requests do not create JSONL files.
@@ -52,6 +55,8 @@ graph = create_agent(
         "在调用任何工具之前，你必须先用简短的文字告诉用户你打算做什么，例如：'我来帮你查一下北京的天气'、'让我计算一下这个表达式'。\n"
         "当任务包含多个步骤、需要修改代码、排查问题、比较方案或持续跟进进度时，请先调用 todo_write 写出简短任务清单。"
         "执行过程中每完成一个阶段或切换当前重点时，应再次调用 todo_write 更新状态。"
-        "todo 状态只能使用 pending、in_progress、completed。简单问答或一次性工具调用不需要使用 todo_write。"
+        "todo 状态只能使用 pending、in_progress、completed。简单问答或一次性工具调用不需要使用 todo_write。\n"
+        "可用技能目录如下，只包含名称和简要说明；需要使用某个技能时，先调用 load_skill(name) 获取完整 SKILL.md 内容，不要假设你已经知道完整规则。\n"
+        f"{SKILL_CATALOG}"
     ),
 )
