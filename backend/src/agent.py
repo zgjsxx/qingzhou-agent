@@ -14,6 +14,7 @@ from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent_memory import AgentMemoryMiddleware
 from agent_permissions import AgentPermissionMiddleware
 from agent_prompt import build_prompt_context, get_system_prompt
+from agent_recovery import AgentRecoveryMiddleware
 from skills import skill_catalog_for_prompt
 from tools import ALL_TOOLS
 
@@ -49,6 +50,7 @@ PROMPT_CONTEXT = build_prompt_context(
 )
 
 middleware = [
+    AgentRecoveryMiddleware(),
     AgentContextCompactMiddleware(),
     AgentMemoryMiddleware(),
     AgentPermissionMiddleware(),
