@@ -390,6 +390,23 @@ def compact(focus: str = "") -> str:
 
 
 @tool
+def task(description: str, cwd: str = "", max_steps: int | None = None) -> str:
+    """Launch a synchronous subagent for an isolated complex subtask.
+
+    The subagent uses a fresh conversation context and returns only its final
+    conclusion. It cannot launch another subagent.
+
+    Args:
+        description: Clear subtask for the subagent to complete.
+        cwd: Optional working directory hint for file and shell tools.
+        max_steps: Optional maximum subagent reasoning/tool steps.
+    """
+    from agent_subagent import spawn_subagent
+
+    return spawn_subagent(description=description, cwd=cwd, max_steps=max_steps)
+
+
+@tool
 def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
     """Read a UTF-8 text file from the working directory.
 
@@ -583,6 +600,7 @@ ALL_TOOLS = [
     todo_write,
     load_skill,
     compact,
+    task,
     read_file,
     write_file,
     edit_file,

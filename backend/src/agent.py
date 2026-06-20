@@ -57,6 +57,7 @@ graph = create_agent(
         "当任务包含多个步骤、需要修改代码、排查问题、比较方案或持续跟进进度时，请先调用 todo_write 写出简短任务清单。"
         "执行过程中每完成一个阶段或切换当前重点时，应再次调用 todo_write 更新状态。"
         "todo 状态只能使用 pending、in_progress、completed。简单问答或一次性工具调用不需要使用 todo_write。\n"
+        "遇到复杂但相对独立的子问题时，可以调用 task(description) 启动子 Agent；子 Agent 会使用独立上下文完成任务并只返回结论。\n"
         "可用技能目录如下，只包含名称和简要说明；需要使用某个技能时，先调用 load_skill(name) 获取完整 SKILL.md 内容，不要假设你已经知道完整规则。\n"
         f"{SKILL_CATALOG}"
     ),
