@@ -45,6 +45,7 @@ import {
   ArtifactTitle,
   useArtifactContext,
 } from "./artifact";
+import { LocalPanels } from "./local-panels";
 
 function StickyToBottomContent(props: {
   content: ReactNode;
@@ -310,7 +311,7 @@ export function Thread() {
         >
           {!chatStarted && (
             <div className="absolute top-0 left-0 z-10 flex w-full items-center justify-between gap-3 p-2 pl-4">
-              <div>
+              <div className="flex items-center gap-2">
                 {(!chatHistoryOpen || !isLargeScreen) && (
                   <Button
                     className="hover:bg-gray-100"
@@ -324,6 +325,7 @@ export function Thread() {
                     )}
                   </Button>
                 )}
+                <LocalPanels />
               </div>
               <div className="absolute top-2 right-4 flex items-center">
                 <OpenGitHubRepo />
@@ -368,6 +370,7 @@ export function Thread() {
                     Agent Chat
                   </span>
                 </motion.button>
+                <LocalPanels />
               </div>
 
               <div className="flex items-center gap-4">

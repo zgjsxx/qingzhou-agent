@@ -31,6 +31,22 @@ PROMPT_SECTIONS = {
         "当用户明确要求记住长期偏好、约束、项目事实或参考线索时，"
         "调用 remember 保存到持久记忆。"
     ),
+    "persistent_tasks": (
+        "For large goals that need durable progress across conversations, use create_task, list_tasks, "
+        "get_task, claim_task, and complete_task. Use blockedBy for dependencies, claim a task before "
+        "working on it, and complete it only after the work is actually done. Keep todo_write for short "
+        "in-session checklists; persistent tasks are for recoverable project-level work."
+    ),
+    "background_tasks": (
+        "For slow shell commands such as installs, builds, tests, deploys, or long scans, prefer "
+        "run_shell_command(..., run_in_background=True). It returns a background task id immediately. "
+        "Use list_background_tasks and get_background_task to check status and read output later."
+    ),
+    "ssh": (
+        "Use run_ssh_command when the user asks to inspect or operate on a configured remote server over SSH. "
+        "Prefer the saved SSH configuration when host/user/key are not provided explicitly. "
+        "Remote shell commands still follow the same safety rules as local shell commands."
+    ),
     "skills": (
         "可用技能目录如下，只包含名称和简要说明；需要使用某个技能时，"
         "先调用 load_skill(name) 获取完整 SKILL.md 内容，不要假设你已经知道完整规则。"
@@ -78,6 +94,12 @@ def assemble_system_prompt(context: dict[str, Any]) -> str:
         sections.append(PROMPT_SECTIONS["subagent"])
     if "remember" in tool_names:
         sections.append(PROMPT_SECTIONS["memory"])
+    if {"create_task", "list_tasks", "get_task", "claim_task", "complete_task"} <= tool_names:
+        sections.append(PROMPT_SECTIONS["persistent_tasks"])
+    if {"list_background_tasks", "get_background_task", "run_shell_command"} <= tool_names:
+        sections.append(PROMPT_SECTIONS["background_tasks"])
+    if "run_ssh_command" in tool_names:
+        sections.append(PROMPT_SECTIONS["ssh"])
 
     skill_catalog = str(context.get("skill_catalog", "")).strip()
     if "load_skill" in tool_names and skill_catalog:

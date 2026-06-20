@@ -127,10 +127,15 @@ def _normalize_json_value(value: Any) -> Any:
 
 def _canonical_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(args)
-    if tool_name == "run_shell_command":
+    if tool_name in {"run_shell_command", "run_ssh_command"}:
         normalized["command"] = str(normalized.get("command", "")).strip()
-        normalized["cwd"] = str(normalized.get("cwd", ""))
-        normalized["shell"] = str(normalized.get("shell", "auto"))
+        if tool_name == "run_shell_command":
+            normalized["cwd"] = str(normalized.get("cwd", ""))
+            normalized["shell"] = str(normalized.get("shell", "auto"))
+        else:
+            normalized["host"] = str(normalized.get("host", ""))
+            normalized["user"] = str(normalized.get("user", ""))
+            normalized["port"] = normalized.get("port", None)
         normalized["timeout_seconds"] = normalized.get("timeout_seconds", 30)
     return _normalize_json_value(normalized)
 
@@ -181,7 +186,7 @@ def _check_permission_rules(tool_name: str, args: dict[str, Any]) -> PermissionD
     ):
         return PermissionDecision("ask", "Writing outside the working directory requires approval.")
 
-    if tool_name == "run_shell_command":
+    if tool_name in {"run_shell_command", "run_ssh_command"}:
         command = str(args.get("command", ""))
         normalized = command.strip().lower()
         for pattern, reason in SHELL_ASK_PATTERNS:
@@ -193,7 +198,7 @@ def _check_permission_rules(tool_name: str, args: dict[str, Any]) -> PermissionD
 
 def check_tool_permission(tool_name: str, args: dict[str, Any]) -> PermissionDecision:
     """Run the s03 permission pipeline for a tool call."""
-    if tool_name == "run_shell_command":
+    if tool_name in {"run_shell_command", "run_ssh_command"}:
         deny_decision = _check_shell_deny_list(str(args.get("command", "")))
         if deny_decision.behavior == "deny":
             return deny_decision

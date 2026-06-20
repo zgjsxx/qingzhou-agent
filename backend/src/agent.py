@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from langchain.agents import create_agent
 
+from agent_config import config_str
 from agent_context import AgentContextCompactMiddleware
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent_memory import AgentMemoryMiddleware
@@ -18,10 +19,10 @@ from agent_recovery import AgentRecoveryMiddleware
 from skills import skill_catalog_for_prompt
 from tools import ALL_TOOLS
 
-LLM_ADAPTER_TYPE = os.getenv("LLM_ADAPTER_TYPE", "anthropic").strip()
-LLM_MODEL = os.getenv("LLM_MODEL", "glm-5.1").strip()
-LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip()
+LLM_ADAPTER_TYPE = os.getenv("LLM_ADAPTER_TYPE", config_str("llm", "adapterType", "anthropic")).strip()
+LLM_MODEL = os.getenv("LLM_MODEL", config_str("llm", "model", "glm-5.1")).strip()
+LLM_API_KEY = os.getenv("LLM_API_KEY", config_str("llm", "apiKey", "")).strip()
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", config_str("llm", "baseUrl", "")).strip()
 
 
 def configure_llm_provider_env() -> None:
