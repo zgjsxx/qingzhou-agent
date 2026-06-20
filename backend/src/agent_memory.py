@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -296,7 +297,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         return handler(request)
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-        request = self._prepare_request(request)
+        request = await asyncio.to_thread(self._prepare_request, request)
         return await handler(request)
 
     def _prepare_request(self, request: Any) -> Any:
