@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 
 from agent_context import AgentContextCompactMiddleware
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
+from agent_memory import AgentMemoryMiddleware
 from agent_permissions import AgentPermissionMiddleware
 from skills import skill_catalog_for_prompt
 from tools import ALL_TOOLS
@@ -41,7 +42,11 @@ configure_llm_provider_env()
 
 SKILL_CATALOG = skill_catalog_for_prompt()
 
-middleware = [AgentContextCompactMiddleware(), AgentPermissionMiddleware()]
+middleware = [
+    AgentContextCompactMiddleware(),
+    AgentMemoryMiddleware(),
+    AgentPermissionMiddleware(),
+]
 
 # Keep interaction logging opt-in so normal chat requests do not create JSONL files.
 if is_agent_logging_enabled():
@@ -58,6 +63,7 @@ graph = create_agent(
         "执行过程中每完成一个阶段或切换当前重点时，应再次调用 todo_write 更新状态。"
         "todo 状态只能使用 pending、in_progress、completed。简单问答或一次性工具调用不需要使用 todo_write。\n"
         "遇到复杂但相对独立的子问题时，可以调用 task(description) 启动子 Agent；子 Agent 会使用独立上下文完成任务并只返回结论。\n"
+        "当用户明确要求记住长期偏好、约束、项目事实或参考线索时，调用 remember 保存到持久记忆。\n"
         "可用技能目录如下，只包含名称和简要说明；需要使用某个技能时，先调用 load_skill(name) 获取完整 SKILL.md 内容，不要假设你已经知道完整规则。\n"
         f"{SKILL_CATALOG}"
     ),

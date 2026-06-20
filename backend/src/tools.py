@@ -16,6 +16,7 @@ from pathlib import Path
 from langchain.tools import tool
 
 from agent_context import MANUAL_COMPACT_MARKER
+from agent_memory import write_memory_file
 from skills import load_skill_content
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -390,6 +391,19 @@ def compact(focus: str = "") -> str:
 
 
 @tool
+def remember(name: str, type: str, description: str, body: str) -> str:
+    """Persist a durable memory for future conversations.
+
+    Args:
+        name: Short memory name, for example user-preference-tabs.
+        type: One of user, feedback, project, or reference.
+        description: One-line summary used for memory lookup.
+        body: Full markdown detail explaining what to remember and how to apply it.
+    """
+    return write_memory_file(name=name, mem_type=type, description=description, body=body)
+
+
+@tool
 def task(description: str, cwd: str = "", max_steps: int | None = None) -> str:
     """Launch a synchronous subagent for an isolated complex subtask.
 
@@ -600,6 +614,7 @@ ALL_TOOLS = [
     todo_write,
     load_skill,
     compact,
+    remember,
     task,
     read_file,
     write_file,
