@@ -6,3 +6,4 @@ __pycache__/
 logs/
 .tasks/
 .agent_outputs/
+.agent_uploads/

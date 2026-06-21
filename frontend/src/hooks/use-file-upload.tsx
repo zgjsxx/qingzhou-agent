@@ -72,10 +72,14 @@ export function useFileUpload({
       );
     }
 
-    const newBlocks = uniqueFiles.length
-      ? await Promise.all(uniqueFiles.map(fileToContentBlock))
-      : [];
-    setContentBlocks((prev) => [...prev, ...newBlocks]);
+    try {
+      const newBlocks = uniqueFiles.length
+        ? await Promise.all(uniqueFiles.map(fileToContentBlock))
+        : [];
+      setContentBlocks((prev) => [...prev, ...newBlocks]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to upload file.");
+    }
     e.target.value = "";
   };
 
@@ -132,10 +136,14 @@ export function useFileUpload({
         );
       }
 
-      const newBlocks = uniqueFiles.length
-        ? await Promise.all(uniqueFiles.map(fileToContentBlock))
-        : [];
-      setContentBlocks((prev) => [...prev, ...newBlocks]);
+      try {
+        const newBlocks = uniqueFiles.length
+          ? await Promise.all(uniqueFiles.map(fileToContentBlock))
+          : [];
+        setContentBlocks((prev) => [...prev, ...newBlocks]);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to upload file.");
+      }
     };
     const handleWindowDragEnd = (e: DragEvent) => {
       dragCounter.current = 0;
@@ -252,8 +260,12 @@ export function useFileUpload({
       );
     }
     if (uniqueFiles.length > 0) {
-      const newBlocks = await Promise.all(uniqueFiles.map(fileToContentBlock));
-      setContentBlocks((prev) => [...prev, ...newBlocks]);
+      try {
+        const newBlocks = await Promise.all(uniqueFiles.map(fileToContentBlock));
+        setContentBlocks((prev) => [...prev, ...newBlocks]);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to upload file.");
+      }
     }
   };
 

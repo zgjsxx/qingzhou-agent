@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import time
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +142,10 @@ def _persist_large_output(message: ToolMessage, output: str) -> str:
     )
 
 
+async def _persist_large_output_async(message: ToolMessage, output: str) -> str:
+    return await asyncio.to_thread(_persist_large_output, message, output)
+
+
 def re_safe_id(value: str) -> str:
     return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value)[:120]
 
@@ -163,6 +168,35 @@ def _tool_result_budget_updates(messages: list[Any], max_chars: int, persist_thr
         if replacement is None:
             continue
         replacement.content = _persist_large_output(message, content)
+        updates.append(replacement)
+        total -= len(content)
+        total += len(_message_content_text(replacement))
+
+    return updates
+
+
+async def _tool_result_budget_updates_async(
+    messages: list[Any],
+    max_chars: int,
+    persist_threshold: int,
+) -> list[BaseMessage]:
+    tool_messages = [message for message in messages if isinstance(message, ToolMessage)]
+    total = sum(len(_message_content_text(message)) for message in tool_messages)
+    if total <= max_chars:
+        return []
+
+    updates: list[BaseMessage] = []
+    ranked = sorted(tool_messages, key=lambda message: len(_message_content_text(message)), reverse=True)
+    for message in ranked:
+        if total <= max_chars:
+            break
+        content = _message_content_text(message)
+        if len(content) <= persist_threshold or content.startswith("<persisted-output>"):
+            continue
+        replacement = _replacement_tool_message(message)
+        if replacement is None:
+            continue
+        replacement.content = await _persist_large_output_async(message, content)
         updates.append(replacement)
         total -= len(content)
         total += len(_message_content_text(replacement))
@@ -254,8 +288,59 @@ def compact_message_updates(messages: list[Any]) -> list[BaseMessage]:
     return updates
 
 
+async def acompact_message_updates(messages: list[Any]) -> list[BaseMessage]:
+    """Build async-safe reducer updates for compaction in ASGI contexts."""
+    if not is_context_compaction_enabled():
+        return []
+
+    keep_recent_tool_results = _int_env("AGENT_CONTEXT_KEEP_RECENT_TOOL_RESULTS", 4)
+    tool_result_min_chars = _int_env("AGENT_CONTEXT_TOOL_RESULT_MIN_CHARS", 1200)
+    tool_result_budget_chars = _int_env("AGENT_CONTEXT_TOOL_RESULT_BUDGET_CHARS", 200_000)
+    persist_threshold_chars = _int_env("AGENT_CONTEXT_PERSIST_THRESHOLD_CHARS", 30_000)
+    max_messages = _int_env("AGENT_CONTEXT_MAX_MESSAGES", 80)
+    keep_head = _int_env("AGENT_CONTEXT_KEEP_HEAD_MESSAGES", 4)
+    keep_tail = _int_env("AGENT_CONTEXT_KEEP_TAIL_MESSAGES", 60)
+
+    updates: list[BaseMessage] = []
+    updates.extend(
+        await _tool_result_budget_updates_async(
+            messages,
+            tool_result_budget_chars,
+            persist_threshold_chars,
+        )
+    )
+    updates.extend(_micro_compact_updates(messages, keep_recent_tool_results, tool_result_min_chars))
+    updates.extend(_snip_compact_updates(messages, max_messages, keep_head, keep_tail))
+    return updates
+
+
 def _estimate_chars(messages: list[Any]) -> int:
-    return len(json.dumps(messages_to_dict(messages), ensure_ascii=False, default=str))
+    return len(json.dumps(_messages_for_context_json(messages), ensure_ascii=False, default=str))
+
+
+def _redact_large_payloads(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_redact_large_payloads(item) for item in value]
+
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "data" and isinstance(item, str):
+                mime_type = value.get("mimeType") or value.get("mime_type") or value.get("media_type")
+                label = f" {mime_type}" if mime_type else ""
+                redacted[key] = f"<redacted{label} payload, {len(item)} chars>"
+            elif key in {"image_url", "source"} and isinstance(item, dict):
+                redacted[key] = _redact_large_payloads(item)
+            else:
+                redacted[key] = _redact_large_payloads(item)
+        return redacted
+
+    return value
+
+
+def _messages_for_context_json(messages: list[Any]) -> list[dict[str, Any]]:
+    """Serialize messages for summary/estimation without huge file payloads."""
+    return _redact_large_payloads(messages_to_dict(messages))
 
 
 def _write_transcript(messages: list[Any], reason: str) -> Path:
@@ -266,6 +351,10 @@ def _write_transcript(messages: list[Any], reason: str) -> Path:
             handle.write(json.dumps(messages_to_dict([message])[0], ensure_ascii=False, default=str))
             handle.write("\n")
     return path
+
+
+async def _write_transcript_async(messages: list[Any], reason: str) -> Path:
+    return await asyncio.to_thread(_write_transcript, messages, reason)
 
 
 def _message_text(message: Any) -> str:
@@ -297,7 +386,7 @@ def _is_manual_compact_request(messages: list[Any]) -> bool:
 
 
 def _summary_prompt(messages: list[Any], transcript_path: Path, reason: str) -> str:
-    conversation = json.dumps(messages_to_dict(messages), ensure_ascii=False, default=str)
+    conversation = json.dumps(_messages_for_context_json(messages), ensure_ascii=False, default=str)
     max_input_chars = _int_env("AGENT_CONTEXT_SUMMARY_INPUT_CHARS", 100_000)
     if len(conversation) > max_input_chars:
         conversation = conversation[-max_input_chars:]
@@ -327,7 +416,7 @@ def _summarize_messages_sync(model: Any, messages: list[Any], reason: str) -> st
 
 
 async def _summarize_messages_async(model: Any, messages: list[Any], reason: str) -> str:
-    transcript_path = _write_transcript(messages, reason)
+    transcript_path = await _write_transcript_async(messages, reason)
     response = await model.ainvoke([HumanMessage(content=_summary_prompt(messages, transcript_path, reason))])
     summary = _message_text(response).strip()
     return summary or "(empty compact summary)"
@@ -383,13 +472,32 @@ class AgentContextCompactMiddleware(AgentMiddleware):
         return self._compact_state(state, runtime)
 
     async def abefore_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
-        return self._compact_state(state, runtime)
+        return await self._acompact_state(state, runtime)
 
     def _compact_state(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         thread_key = _thread_key(runtime, state)
         pending = PENDING_STATE_UPDATES.pop(thread_key, [])
         messages = _state_messages(state)
         updates = compact_message_updates(messages)
+        combined = [*pending, *updates]
+        if not combined:
+            return None
+
+        log_event(
+            "context.compact",
+            message_count=len(messages),
+            update_count=len(combined),
+            pending_count=len(pending),
+            replacement_count=sum(1 for update in combined if not isinstance(update, RemoveMessage)),
+            removal_count=sum(1 for update in combined if isinstance(update, RemoveMessage)),
+        )
+        return {"messages": combined}
+
+    async def _acompact_state(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        thread_key = _thread_key(runtime, state)
+        pending = PENDING_STATE_UPDATES.pop(thread_key, [])
+        messages = _state_messages(state)
+        updates = await acompact_message_updates(messages)
         combined = [*pending, *updates]
         if not combined:
             return None

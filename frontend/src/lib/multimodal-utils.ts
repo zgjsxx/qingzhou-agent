@@ -20,9 +20,8 @@ export async function fileToContentBlock(
     return Promise.reject(new Error(`Unsupported file type: ${file.type}`));
   }
 
-  const data = await fileToBase64(file);
-
   if (supportedImageTypes.includes(file.type)) {
+    const data = await fileToBase64(file);
     return {
       type: "image",
       mimeType: file.type,
@@ -32,11 +31,67 @@ export async function fileToContentBlock(
   }
 
   // PDF
+  const uploaded = await uploadFileReference(file);
   return {
     type: "file",
     mimeType: "application/pdf",
-    data,
-    metadata: { filename: file.name },
+    data: "",
+    metadata: {
+      filename: uploaded.filename,
+      uploadId: uploaded.uploadId,
+      path: uploaded.path,
+      size: uploaded.size,
+      stored: true,
+    },
+  };
+}
+
+export interface UploadedFileReference {
+  uploadId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  path: string;
+}
+
+async function uploadFileReference(file: File): Promise<UploadedFileReference> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch("/api/local/uploads", {
+    method: "POST",
+    body: formData,
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body?.error || "Failed to upload file.");
+  }
+  return body;
+}
+
+export function uploadedFileBlockToText(
+  block: ContentBlock.Multimodal.Data,
+): { type: "text"; text: string } | null {
+  if (block.type !== "file" || !block.metadata?.stored) {
+    return null;
+  }
+
+  const filename = String(block.metadata.filename || block.metadata.name || "uploaded file");
+  const mimeType = String(block.mimeType || "application/octet-stream");
+  const uploadId = String(block.metadata.uploadId || "");
+  const filePath = String(block.metadata.path || "");
+  const size = Number(block.metadata.size || 0);
+
+  return {
+    type: "text",
+    text: [
+      "[Uploaded file reference]",
+      `filename: ${filename}`,
+      `mimeType: ${mimeType}`,
+      `uploadId: ${uploadId}`,
+      `size: ${size} bytes`,
+      `path: ${filePath}`,
+      "The file content is stored locally and is not embedded in this message. Use file/PDF tools or shell utilities to inspect it when needed.",
+    ].join("\n"),
   };
 }
 

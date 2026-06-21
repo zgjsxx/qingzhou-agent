@@ -40,7 +40,11 @@ PROMPT_SECTIONS = {
     "background_tasks": (
         "For slow shell commands such as installs, builds, tests, deploys, or long scans, prefer "
         "run_shell_command(..., run_in_background=True). It returns a background task id immediately. "
-        "Use list_background_tasks and get_background_task to check status and read output later."
+        "Use list_background_tasks and get_background_task to check status and read output later. "
+        "When creating scripts for long-running work, include progress logging with flush=True or unbuffered "
+        "execution, log each major phase and item/page/file being processed, write durable outputs to files, "
+        "and avoid silent all-at-once loops. For PDF/table extraction or large scans, process incrementally "
+        "and print progress before and after each page or batch."
     ),
     "ssh": (
         "Use run_ssh_command when the user asks to inspect or operate on a configured remote server over SSH. "

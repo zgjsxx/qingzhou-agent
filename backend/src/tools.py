@@ -267,6 +267,57 @@ def _run_shell_process(
         return None, stdout, stderr, True
 
 
+def _run_shell_process_streaming(
+    argv: list[str],
+    cwd: str,
+    timeout: int,
+    log_path: Path,
+) -> tuple[int | None, bool]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        **_popen_kwargs(),
+    )
+    started_at = time.time()
+    timed_out = False
+
+    with log_path.open("a", encoding="utf-8", errors="replace") as handle:
+        handle.write(f"[agent background] pid={process.pid}\n")
+        handle.flush()
+        while True:
+            if process.stdout is not None:
+                line = process.stdout.readline()
+                if line:
+                    handle.write(line)
+                    handle.flush()
+                    continue
+
+            returncode = process.poll()
+            if returncode is not None:
+                if process.stdout is not None:
+                    rest = process.stdout.read()
+                    if rest:
+                        handle.write(rest)
+                handle.flush()
+                return returncode, timed_out
+
+            if time.time() - started_at > timeout:
+                timed_out = True
+                handle.write(f"\n[agent background] timeout after {timeout}s; killing process tree\n")
+                handle.flush()
+                _kill_process_tree(process)
+                return None, timed_out
+
+            time.sleep(0.2)
+
+
 def _background_id() -> str:
     return f"bg_{int(time.time())}_{os.getpid()}_{threading.get_ident()}_{time.time_ns() % 100000:05d}"
 
@@ -338,25 +389,38 @@ def _start_background_shell_command(
         "error": "",
     }
     _write_background_meta(task_id, meta)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        "Background shell task started.\n"
+        f"id: {task_id}\n"
+        f"cwd: {cwd}\n"
+        f"command: {command}\n"
+        f"timeout_seconds: {timeout_seconds}\n"
+        f"started_at: {started_at}\n\n"
+        "output:\n",
+        encoding="utf-8",
+        errors="replace",
+    )
 
     def worker() -> None:
         try:
             selected_shell, argv_prefix = _select_shell(shell)
-            returncode, stdout, stderr, timed_out = _run_shell_process(
+            meta["shell"] = selected_shell
+            with BACKGROUND_TASKS_LOCK:
+                _write_background_meta(task_id, meta)
+            returncode, timed_out = _run_shell_process_streaming(
                 [*argv_prefix, command],
                 cwd=cwd,
                 timeout=timeout_seconds,
+                log_path=log_path,
             )
-            output = (
-                f"shell: {selected_shell}\n"
-                f"cwd: {cwd}\n"
-                f"exit_code: {returncode}\n"
-                f"timed_out: {timed_out}\n\n"
-                f"stdout:\n{stdout}\n\n"
-                f"stderr:\n{stderr}"
-            )
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(output, encoding="utf-8", errors="replace")
+            with log_path.open("a", encoding="utf-8", errors="replace") as handle:
+                handle.write(
+                    "\n[agent background] finished\n"
+                    f"exit_code: {returncode}\n"
+                    f"timed_out: {timed_out}\n"
+                    f"finished_at: {time.time()}\n"
+                )
             meta.update(
                 {
                     "status": "timed_out" if timed_out else "completed",
@@ -368,7 +432,8 @@ def _start_background_shell_command(
             )
         except Exception as exc:
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(f"Error: {exc}\n", encoding="utf-8", errors="replace")
+            with log_path.open("a", encoding="utf-8", errors="replace") as handle:
+                handle.write(f"\n[agent background] Error: {exc}\n")
             meta.update({"status": "failed", "finished_at": time.time(), "error": str(exc)})
         with BACKGROUND_TASKS_LOCK:
             _write_background_meta(task_id, meta)
