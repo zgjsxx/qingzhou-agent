@@ -1,20 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Settings, Sparkles } from "lucide-react";
+import { Settings, Sparkles, XIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../ui/card";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "../ui/sheet";
 import { Textarea } from "../ui/textarea";
+
+type PanelMode = "skills" | "config" | null;
 
 type Skill = {
   name: string;
@@ -52,6 +53,7 @@ const emptyConfig: AgentConfig = {
 };
 
 export function LocalPanels() {
+  const [mode, setMode] = useState<PanelMode>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [config, setConfig] = useState<AgentConfig>(emptyConfig);
   const [saving, setSaving] = useState(false);
@@ -106,153 +108,214 @@ export function LocalPanels() {
   };
 
   return (
-    <div className="flex items-center gap-1">
-      <Sheet>
-        <SheetTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="gap-1.5"
-          >
-            <Sparkles className="size-4" />
-            &#25216;&#33021;
-          </Button>
-        </SheetTrigger>
-        <SheetContent
-          side="left"
-          className="w-[360px] overflow-y-auto sm:max-w-md"
+    <>
+      <div className="flex w-full flex-col gap-1">
+        <Button
+          variant={mode === "skills" ? "secondary" : "ghost"}
+          size="sm"
+          className="w-full justify-start gap-2 px-3"
+          onClick={() => setMode("skills")}
         >
-          <SheetHeader>
-            <SheetTitle>&#25216;&#33021;</SheetTitle>
-            <SheetDescription>
-              Skills currently available to the agent.
-            </SheetDescription>
-          </SheetHeader>
-          <div className="flex flex-col gap-3 px-4 pb-4">
-            {skills.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No skills found.</p>
-            ) : (
-              skills.map((skill) => (
-                <div
-                  key={skill.directory}
-                  className="border-b pb-3 last:border-b-0"
-                >
-                  <div className="text-sm font-medium">{skill.name}</div>
-                  <div className="text-muted-foreground mt-1 text-sm">
-                    {skill.description}
-                  </div>
-                  <div className="text-muted-foreground mt-1 text-xs">
-                    {skill.directory}
-                  </div>
-                </div>
-              ))
-            )}
+          <Sparkles className="size-4" />
+          &#25216;&#33021;
+        </Button>
+        <Button
+          variant={mode === "config" ? "secondary" : "ghost"}
+          size="sm"
+          className="w-full justify-start gap-2 px-3"
+          onClick={() => setMode("config")}
+        >
+          <Settings className="size-4" />
+          &#37197;&#32622;
+        </Button>
+      </div>
+
+      {mode && (
+        <div className="fixed inset-0 z-50 flex bg-black/45 p-4 backdrop-blur-sm">
+          <div className="bg-background mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-lg border shadow-xl">
+            <div className="flex items-center justify-between border-b px-6 py-4">
+              <div>
+                <h2 className="text-xl font-semibold">
+                  {mode === "skills" ? "Skills" : "Configuration"}
+                </h2>
+                <p className="text-muted-foreground text-sm">
+                  {mode === "skills"
+                    ? "Project skills available to the agent."
+                    : "Local LLM and SSH settings saved outside git."}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setMode(null)}
+              >
+                <XIcon className="size-5" />
+                <span className="sr-only">Close</span>
+              </Button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              {mode === "skills" ? (
+                <SkillsPage skills={skills} />
+              ) : (
+                <ConfigPage
+                  config={config}
+                  saving={saving}
+                  onSave={saveConfig}
+                  onChange={updateConfig}
+                />
+              )}
+            </div>
           </div>
-        </SheetContent>
-      </Sheet>
+        </div>
+      )}
+    </>
+  );
+}
 
-      <Sheet>
-        <SheetTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="gap-1.5"
-          >
-            <Settings className="size-4" />
-            &#37197;&#32622;
-          </Button>
-        </SheetTrigger>
-        <SheetContent
-          side="left"
-          className="w-[420px] overflow-y-auto sm:max-w-lg"
+function SkillsPage({ skills }: { skills: Skill[] }) {
+  if (skills.length === 0) {
+    return (
+      <Card className="max-w-xl">
+        <CardHeader>
+          <CardTitle>No skills found</CardTitle>
+          <CardDescription>
+            Add skill folders under the project skills directory.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {skills.map((skill) => (
+        <Card
+          key={skill.directory}
+          className="gap-4 rounded-lg"
         >
-          <SheetHeader>
-            <SheetTitle>&#37197;&#32622;</SheetTitle>
-            <SheetDescription>
-              Saved to backend/.agent_config.json and ignored by git.
-            </SheetDescription>
-          </SheetHeader>
-          <div className="flex flex-col gap-6 px-4 pb-4">
-            <section className="flex flex-col gap-3">
-              <h3 className="text-sm font-semibold">LLM</h3>
-              <LabeledInput
-                label="Adapter"
-                value={config.llm.adapterType}
-                onChange={(value) => updateConfig("llm", "adapterType", value)}
-              />
-              <LabeledInput
-                label="Model"
-                value={config.llm.model}
-                onChange={(value) => updateConfig("llm", "model", value)}
-              />
-              <LabeledInput
-                label="Base URL"
-                value={config.llm.baseUrl}
-                onChange={(value) => updateConfig("llm", "baseUrl", value)}
-              />
-              <LabeledInput
-                label="API Key"
-                type="password"
-                value={config.llm.apiKey}
-                onChange={(value) => updateConfig("llm", "apiKey", value)}
-              />
-              <p className="text-muted-foreground text-xs">
-                Environment variables take precedence over these LLM settings.
-                Restart the LangGraph backend after changing them.
-              </p>
-            </section>
+          <CardHeader>
+            <CardTitle className="text-base">{skill.name}</CardTitle>
+            <CardDescription>{skill.directory}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm leading-6">{skill.description}</p>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
 
-            <section className="flex flex-col gap-3">
-              <h3 className="text-sm font-semibold">SSH</h3>
+function ConfigPage(props: {
+  config: AgentConfig;
+  saving: boolean;
+  onSave: () => void;
+  onChange: (
+    section: keyof AgentConfig,
+    key: string,
+    value: string | number,
+  ) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <Card className="rounded-lg">
+          <CardHeader>
+            <CardTitle>LLM</CardTitle>
+            <CardDescription>
+              Environment variables still take precedence. Restart the backend
+              after changing these values.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <LabeledInput
+              label="Adapter"
+              value={props.config.llm.adapterType}
+              onChange={(value) => props.onChange("llm", "adapterType", value)}
+            />
+            <LabeledInput
+              label="Model"
+              value={props.config.llm.model}
+              onChange={(value) => props.onChange("llm", "model", value)}
+            />
+            <LabeledInput
+              label="Base URL"
+              value={props.config.llm.baseUrl}
+              onChange={(value) => props.onChange("llm", "baseUrl", value)}
+            />
+            <LabeledInput
+              label="API Key"
+              type="password"
+              value={props.config.llm.apiKey}
+              onChange={(value) => props.onChange("llm", "apiKey", value)}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg">
+          <CardHeader>
+            <CardTitle>SSH</CardTitle>
+            <CardDescription>
+              Used by run_ssh_command when host, user, or key are omitted.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_120px]">
               <LabeledInput
                 label="Host"
-                value={config.ssh.host}
-                onChange={(value) => updateConfig("ssh", "host", value)}
-              />
-              <LabeledInput
-                label="User"
-                value={config.ssh.user}
-                onChange={(value) => updateConfig("ssh", "user", value)}
+                value={props.config.ssh.host}
+                onChange={(value) => props.onChange("ssh", "host", value)}
               />
               <LabeledInput
                 label="Port"
                 type="number"
-                value={String(config.ssh.port || 22)}
-                onChange={(value) => updateConfig("ssh", "port", Number(value || 22))}
+                value={String(props.config.ssh.port || 22)}
+                onChange={(value) =>
+                  props.onChange("ssh", "port", Number(value || 22))
+                }
               />
-              <LabeledInput
-                label="Key File"
-                value={config.ssh.keyFile}
-                onChange={(value) => updateConfig("ssh", "keyFile", value)}
+            </div>
+            <LabeledInput
+              label="User"
+              value={props.config.ssh.user}
+              onChange={(value) => props.onChange("ssh", "user", value)}
+            />
+            <LabeledInput
+              label="Key File"
+              value={props.config.ssh.keyFile}
+              onChange={(value) => props.onChange("ssh", "keyFile", value)}
+            />
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="ssh-private-key">Private Key</Label>
+              <Textarea
+                id="ssh-private-key"
+                value={props.config.ssh.privateKey}
+                onChange={(event) =>
+                  props.onChange("ssh", "privateKey", event.target.value)
+                }
+                className="min-h-36 font-mono text-xs"
+                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
               />
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="ssh-private-key">Private Key</Label>
-                <Textarea
-                  id="ssh-private-key"
-                  value={config.ssh.privateKey}
-                  onChange={(event) =>
-                    updateConfig("ssh", "privateKey", event.target.value)
-                  }
-                  className="min-h-32 font-mono text-xs"
-                  placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                />
-              </div>
-              <LabeledInput
-                label="Extra Args"
-                value={config.ssh.extraArgs}
-                onChange={(value) => updateConfig("ssh", "extraArgs", value)}
-              />
-            </section>
+            </div>
+            <LabeledInput
+              label="Extra Args"
+              value={props.config.ssh.extraArgs}
+              onChange={(value) => props.onChange("ssh", "extraArgs", value)}
+            />
+          </CardContent>
+        </Card>
+      </div>
 
-            <Button
-              onClick={saveConfig}
-              disabled={saving}
-            >
-              {saving ? "Saving..." : "Save config"}
-            </Button>
-          </div>
-        </SheetContent>
-      </Sheet>
+      <div className="flex justify-end">
+        <Button
+          size="lg"
+          onClick={props.onSave}
+          disabled={props.saving}
+        >
+          {props.saving ? "Saving..." : "Save config"}
+        </Button>
+      </div>
     </div>
   );
 }

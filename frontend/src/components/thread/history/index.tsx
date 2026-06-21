@@ -14,6 +14,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { PanelRightOpen, PanelRightClose } from "lucide-react";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { LocalPanels } from "../local-panels";
 
 function ThreadList({
   threads,
@@ -96,10 +97,10 @@ export default function ThreadHistory() {
 
   return (
     <>
-      <div className="shadow-inner-right hidden h-screen w-[300px] shrink-0 flex-col items-start justify-start gap-6 border-r-[1px] border-slate-300 lg:flex">
-        <div className="flex w-full items-center justify-between px-4 pt-1.5">
+      <div className="shadow-inner-right hidden h-screen w-[300px] shrink-0 flex-col items-start justify-start border-r-[1px] border-slate-300 lg:flex">
+        <div className="flex w-full flex-col gap-2 border-b px-3 py-3">
           <Button
-            className="hover:bg-gray-100"
+            className="w-fit hover:bg-gray-100"
             variant="ghost"
             onClick={() => setChatHistoryOpen((p) => !p)}
           >
@@ -109,9 +110,10 @@ export default function ThreadHistory() {
               <PanelRightClose className="size-5" />
             )}
           </Button>
-          <h1 className="text-xl font-semibold tracking-tight">
-            Thread History
-          </h1>
+          <LocalPanels />
+        </div>
+        <div className="text-muted-foreground w-full px-4 pt-4 pb-2 text-xs font-medium tracking-wide uppercase">
+          Thread History
         </div>
         {threadsLoading ? (
           <ThreadHistoryLoading />
@@ -129,10 +131,11 @@ export default function ThreadHistory() {
         >
           <SheetContent
             side="left"
-            className="flex lg:hidden"
+            className="flex gap-0 lg:hidden"
           >
-            <SheetHeader>
+            <SheetHeader className="border-b">
               <SheetTitle>Thread History</SheetTitle>
+              <LocalPanels />
             </SheetHeader>
             <ThreadList
               threads={threads}

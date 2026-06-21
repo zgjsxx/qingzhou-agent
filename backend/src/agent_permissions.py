@@ -53,6 +53,7 @@ SHELL_ASK_PATTERNS = [
 WRITE_TOOLS = {"write_file", "edit_file"}
 APPROVED_TOOL_CALLS: dict[str, set[str]] = {}
 APPROVED_TOOL_CALLS_LOCK = threading.Lock()
+DEFAULT_WORKDIR = Path(__file__).parent.parent
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -153,7 +154,8 @@ def _tool_call_signature(tool_name: str, args: dict[str, Any]) -> str:
 
 
 def _resolve_root(cwd: str) -> Path:
-    return Path(cwd or Path.cwd()).expanduser().resolve()
+    requested = Path(cwd).expanduser() if cwd else DEFAULT_WORKDIR
+    return requested if requested.is_absolute() else DEFAULT_WORKDIR / requested
 
 
 def _path_escapes_root(path: str, cwd: str = "") -> bool:
@@ -162,11 +164,8 @@ def _path_escapes_root(path: str, cwd: str = "") -> bool:
 
     root = _resolve_root(cwd)
     requested = Path(path).expanduser()
-    resolved = (
-        (root / requested).resolve()
-        if not requested.is_absolute()
-        else requested.resolve()
-    )
+    resolved = requested if requested.is_absolute() else root / requested
+    resolved = resolved.absolute()
     return not resolved.is_relative_to(root)
 
 

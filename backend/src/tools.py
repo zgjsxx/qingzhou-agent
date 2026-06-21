@@ -11,6 +11,7 @@ import time
 import glob as glob_module
 import json
 import threading
+import asyncio
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -60,23 +61,25 @@ def reset_current_tool_thread_id(token) -> None:
 
 def _resolve_cwd(cwd: str) -> str:
     if not cwd:
-        return str(Path.cwd())
+        return str(BACKEND_DIR)
 
-    resolved = Path(cwd).expanduser().resolve()
+    requested = Path(cwd).expanduser()
+    resolved = requested if requested.is_absolute() else BACKEND_DIR / requested
     if not resolved.exists():
         raise ValueError(f"Working directory does not exist: {resolved}")
     if not resolved.is_dir():
         raise ValueError(f"Working directory is not a directory: {resolved}")
-    return str(resolved)
+    return str(resolved.absolute())
 
 
 def _resolve_safe_path(path: str, cwd: str = "") -> tuple[Path, Path]:
     if not path or not path.strip():
         raise ValueError("Path must not be empty.")
 
-    root = Path(_resolve_cwd(cwd)).resolve()
+    root = Path(_resolve_cwd(cwd))
     requested = Path(path).expanduser()
-    resolved = (root / requested).resolve() if not requested.is_absolute() else requested.resolve()
+    resolved = requested if requested.is_absolute() else root / requested
+    resolved = resolved.absolute()
 
     if not resolved.is_relative_to(root):
         raise ValueError(f"Path escapes working directory: {path}")
@@ -694,15 +697,7 @@ def complete_task(task_id: str) -> str:
     return "\n".join(output)
 
 
-@tool
-def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
-    """Read a UTF-8 text file from the working directory.
-
-    Args:
-        path: File path to read. Relative paths are resolved under cwd.
-        cwd: Optional working directory. Empty means the backend process working directory.
-        limit: Optional maximum number of lines to return.
-    """
+def _read_file_impl(path: str, cwd: str = "", limit: int | None = None) -> str:
     try:
         root, file_path = _resolve_safe_path(path, cwd)
         if not file_path.exists():
@@ -725,14 +720,18 @@ def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
 
 
 @tool
-def write_file(path: str, content: str, cwd: str = "") -> str:
-    """Write UTF-8 text to a file inside the working directory.
+async def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
+    """Read a UTF-8 text file from the working directory.
 
     Args:
-        path: File path to write. Relative paths are resolved under cwd.
-        content: Text content to write.
+        path: File path to read. Relative paths are resolved under cwd.
         cwd: Optional working directory. Empty means the backend process working directory.
+        limit: Optional maximum number of lines to return.
     """
+    return await asyncio.to_thread(_read_file_impl, path, cwd, limit)
+
+
+def _write_file_impl(path: str, content: str, cwd: str = "") -> str:
     try:
         root, file_path = _resolve_safe_path(path, cwd)
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -745,15 +744,18 @@ def write_file(path: str, content: str, cwd: str = "") -> str:
 
 
 @tool
-def edit_file(path: str, old_text: str, new_text: str, cwd: str = "") -> str:
-    """Replace the first exact text match in a UTF-8 file.
+async def write_file(path: str, content: str, cwd: str = "") -> str:
+    """Write UTF-8 text to a file inside the working directory.
 
     Args:
-        path: File path to edit. Relative paths are resolved under cwd.
-        old_text: Exact text to replace once.
-        new_text: Replacement text.
+        path: File path to write. Relative paths are resolved under cwd.
+        content: Text content to write.
         cwd: Optional working directory. Empty means the backend process working directory.
     """
+    return await asyncio.to_thread(_write_file_impl, path, content, cwd)
+
+
+def _edit_file_impl(path: str, old_text: str, new_text: str, cwd: str = "") -> str:
     if old_text == "":
         return "Error: old_text must not be empty."
 
@@ -776,24 +778,29 @@ def edit_file(path: str, old_text: str, new_text: str, cwd: str = "") -> str:
         return f"Error: {exc}"
 
 
-@tool("glob")
-def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
-    """Find files by glob pattern inside the working directory.
+@tool
+async def edit_file(path: str, old_text: str, new_text: str, cwd: str = "") -> str:
+    """Replace the first exact text match in a UTF-8 file.
 
     Args:
-        pattern: Glob pattern, for example **/*.py or backend/src/*.py.
+        path: File path to edit. Relative paths are resolved under cwd.
+        old_text: Exact text to replace once.
+        new_text: Replacement text.
         cwd: Optional working directory. Empty means the backend process working directory.
-        limit: Maximum number of matches to return.
     """
+    return await asyncio.to_thread(_edit_file_impl, path, old_text, new_text, cwd)
+
+
+def _glob_files_impl(pattern: str, cwd: str = "", limit: int = 200) -> str:
     if not pattern or not pattern.strip():
         return "Error: pattern must not be empty."
 
     try:
-        root = Path(_resolve_cwd(cwd)).resolve()
+        root = Path(_resolve_cwd(cwd))
         max_matches = _parse_optional_positive_int(limit, 200)
         matches: list[str] = []
         for match in glob_module.glob(pattern, root_dir=root, recursive=True):
-            resolved = (root / match).resolve()
+            resolved = (root / match).absolute()
             if resolved.is_relative_to(root):
                 matches.append(_relative_to_root(resolved, root))
 
@@ -809,6 +816,18 @@ def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
         return f"Error: failed to glob files: {exc}"
     except ValueError as exc:
         return f"Error: {exc}"
+
+
+@tool("glob")
+async def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
+    """Find files by glob pattern inside the working directory.
+
+    Args:
+        pattern: Glob pattern, for example **/*.py or backend/src/*.py.
+        cwd: Optional working directory. Empty means the backend process working directory.
+        limit: Maximum number of matches to return.
+    """
+    return await asyncio.to_thread(_glob_files_impl, pattern, cwd, limit)
 
 
 @tool
