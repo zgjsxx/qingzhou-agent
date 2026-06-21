@@ -651,13 +651,16 @@ def load_skill(name: str) -> str:
 
 @tool
 def compact(focus: str = "") -> str:
-    """Summarize and compact earlier conversation context before continuing.
+    """Placeholder for future conversation context compaction.
 
     Args:
-        focus: Optional note about what details the summary should preserve.
+        focus: Optional note about what details a future compaction should preserve.
     """
     note = f"\nFocus: {focus.strip()}" if focus and focus.strip() else ""
-    return f"{MANUAL_COMPACT_MARKER} Conversation compaction will run before the next model step.{note}"
+    return (
+        f"{MANUAL_COMPACT_MARKER} Context compaction is currently disabled; "
+        f"no messages were summarized or removed.{note}"
+    )
 
 
 @tool
