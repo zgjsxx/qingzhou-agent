@@ -11,7 +11,6 @@ import time
 import glob as glob_module
 import json
 import threading
-import asyncio
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -788,7 +787,7 @@ def _read_file_impl(path: str, cwd: str = "", limit: int | None = None) -> str:
 
 
 @tool
-async def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
+def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
     """Read a UTF-8 text file from the working directory.
 
     Args:
@@ -796,7 +795,7 @@ async def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
         cwd: Optional working directory. Empty means the backend process working directory.
         limit: Optional maximum number of lines to return.
     """
-    return await asyncio.to_thread(_read_file_impl, path, cwd, limit)
+    return _read_file_impl(path, cwd, limit)
 
 
 def _write_file_impl(path: str, content: str, cwd: str = "") -> str:
@@ -812,7 +811,7 @@ def _write_file_impl(path: str, content: str, cwd: str = "") -> str:
 
 
 @tool
-async def write_file(path: str, content: str, cwd: str = "") -> str:
+def write_file(path: str, content: str, cwd: str = "") -> str:
     """Write UTF-8 text to a file inside the working directory.
 
     Args:
@@ -820,7 +819,7 @@ async def write_file(path: str, content: str, cwd: str = "") -> str:
         content: Text content to write.
         cwd: Optional working directory. Empty means the backend process working directory.
     """
-    return await asyncio.to_thread(_write_file_impl, path, content, cwd)
+    return _write_file_impl(path, content, cwd)
 
 
 def _edit_file_impl(path: str, old_text: str, new_text: str, cwd: str = "") -> str:
@@ -847,7 +846,7 @@ def _edit_file_impl(path: str, old_text: str, new_text: str, cwd: str = "") -> s
 
 
 @tool
-async def edit_file(path: str, old_text: str, new_text: str, cwd: str = "") -> str:
+def edit_file(path: str, old_text: str, new_text: str, cwd: str = "") -> str:
     """Replace the first exact text match in a UTF-8 file.
 
     Args:
@@ -856,7 +855,7 @@ async def edit_file(path: str, old_text: str, new_text: str, cwd: str = "") -> s
         new_text: Replacement text.
         cwd: Optional working directory. Empty means the backend process working directory.
     """
-    return await asyncio.to_thread(_edit_file_impl, path, old_text, new_text, cwd)
+    return _edit_file_impl(path, old_text, new_text, cwd)
 
 
 def _glob_files_impl(pattern: str, cwd: str = "", limit: int = 200) -> str:
@@ -887,7 +886,7 @@ def _glob_files_impl(pattern: str, cwd: str = "", limit: int = 200) -> str:
 
 
 @tool("glob")
-async def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
+def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
     """Find files by glob pattern inside the working directory.
 
     Args:
@@ -895,7 +894,7 @@ async def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
         cwd: Optional working directory. Empty means the backend process working directory.
         limit: Maximum number of matches to return.
     """
-    return await asyncio.to_thread(_glob_files_impl, pattern, cwd, limit)
+    return _glob_files_impl(pattern, cwd, limit)
 
 
 @tool
