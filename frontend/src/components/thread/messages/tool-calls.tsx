@@ -3,8 +3,87 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, ChevronUp } from "lucide-react";
 
+const TOOL_ARG_PREVIEW_CHARS = 100;
+
 function isComplexValue(value: any): boolean {
   return Array.isArray(value) || (typeof value === "object" && value !== null);
+}
+
+function truncateText(value: string): { text: string; truncated: boolean } {
+  if (value.length <= TOOL_ARG_PREVIEW_CHARS) {
+    return { text: value, truncated: false };
+  }
+  return {
+    text: `${value.slice(0, TOOL_ARG_PREVIEW_CHARS)}...`,
+    truncated: true,
+  };
+}
+
+function getArgPreview(value: unknown): { text: string; expandable: boolean } {
+  if (typeof value === "string") {
+    const preview = truncateText(value);
+    return { text: preview.text, expandable: preview.truncated };
+  }
+
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return { text: String(value), expandable: false };
+  }
+
+  if (Array.isArray(value)) {
+    return { text: `Array(${value.length})`, expandable: true };
+  }
+
+  if (typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>);
+    const shownKeys = keys.slice(0, 5).join(", ");
+    const suffix = keys.length > 5 ? ", ..." : "";
+    return {
+      text: `Object { ${shownKeys}${suffix} }`,
+      expandable: true,
+    };
+  }
+
+  const preview = truncateText(String(value));
+  return { text: preview.text, expandable: preview.truncated };
+}
+
+function stringifyExpandedArg(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function ToolArgValue({ value }: { value: unknown }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const preview = getArgPreview(value);
+  const displayedText = isExpanded ? stringifyExpandedArg(value) : preview.text;
+  const canExpand = preview.expandable;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <code className="rounded bg-gray-50 px-2 py-1 font-mono text-sm break-all whitespace-pre-wrap">
+        {displayedText}
+      </code>
+      {canExpand && (
+        <button
+          type="button"
+          onClick={() => setIsExpanded((prev) => !prev)}
+          className="w-fit text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-700 hover:underline"
+        >
+          {isExpanded ? "折叠" : "展开"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function ToolCalls({
@@ -43,13 +122,7 @@ export function ToolCalls({
                         {key}
                       </td>
                       <td className="px-4 py-2 text-sm text-gray-500">
-                        {isComplexValue(value) ? (
-                          <code className="rounded bg-gray-50 px-2 py-1 font-mono text-sm break-all">
-                            {JSON.stringify(value, null, 2)}
-                          </code>
-                        ) : (
-                          String(value)
-                        )}
+                        <ToolArgValue value={value} />
                       </td>
                     </tr>
                   ))}
