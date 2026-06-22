@@ -112,6 +112,12 @@ function OpenGitHubRepo() {
   );
 }
 
+function formatCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
+}
+
 export function Thread() {
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const [artifactOpen, closeArtifact] = useArtifactOpen();
@@ -142,6 +148,7 @@ export function Thread() {
   const stream = useStreamContext();
   const messages = stream.messages;
   const isLoading = stream.isLoading;
+  const contextUsage = stream.values.context_usage;
 
   const lastError = useRef<string | undefined>(undefined);
 
@@ -484,7 +491,7 @@ export function Thread() {
                         className="field-sizing-content resize-none border-none bg-transparent p-3.5 pb-0 shadow-none ring-0 outline-none focus:ring-0 focus:outline-none"
                       />
 
-                      <div className="flex items-center gap-6 p-2 pt-4">
+                      <div className="flex flex-wrap items-center gap-4 p-2 pt-4">
                         <div>
                           <div className="flex items-center space-x-2">
                             <Switch
@@ -517,27 +524,49 @@ export function Thread() {
                           accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
                           className="hidden"
                         />
-                        {stream.isLoading ? (
-                          <Button
-                            key="stop"
-                            onClick={() => stream.stop()}
-                            className="ml-auto"
-                          >
-                            <LoaderCircle className="h-4 w-4 animate-spin" />
-                            Cancel
-                          </Button>
-                        ) : (
-                          <Button
-                            type="submit"
-                            className="ml-auto shadow-md transition-all"
-                            disabled={
-                              isLoading ||
-                              (!input.trim() && contentBlocks.length === 0)
+                        <div className="ml-auto flex items-center gap-3">
+                          <div
+                            className="text-muted-foreground bg-background/70 whitespace-nowrap rounded-md border px-2.5 py-1 text-xs"
+                            title={
+                              contextUsage?.input_tokens != null
+                                ? `${contextUsage.input_tokens.toLocaleString()} input tokens${contextUsage.output_tokens != null ? `, ${contextUsage.output_tokens.toLocaleString()} output tokens` : ""}${contextUsage.total_tokens != null ? `, ${contextUsage.total_tokens.toLocaleString()} total tokens` : ""}, ${contextUsage.message_count.toLocaleString()} messages${contextUsage.includes_tools ? ", tools included" : ""}. Source: ${contextUsage.counter ?? "model tokenizer"}`
+                                : contextUsage?.error
+                                  ? `Exact context usage unavailable: ${contextUsage.error}`
+                                  : "Exact context usage will appear after the next model call."
                             }
                           >
-                            Send
-                          </Button>
-                        )}
+                            {contextUsage?.input_tokens != null ? (
+                              <>
+                                Context {formatCount(contextUsage.input_tokens)}{" "}
+                                tok | {contextUsage.message_count} msgs
+                              </>
+                            ) : contextUsage?.error ? (
+                              "Context unavailable"
+                            ) : (
+                              "Context pending"
+                            )}
+                          </div>
+                          {stream.isLoading ? (
+                            <Button
+                              key="stop"
+                              onClick={() => stream.stop()}
+                            >
+                              <LoaderCircle className="h-4 w-4 animate-spin" />
+                              Cancel
+                            </Button>
+                          ) : (
+                            <Button
+                              type="submit"
+                              className="shadow-md transition-all"
+                              disabled={
+                                isLoading ||
+                                (!input.trim() && contentBlocks.length === 0)
+                              }
+                            >
+                              Send
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </form>
                   </div>

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from langchain.agents import create_agent
 
 from agent_config import config_str
-from agent_context import AgentContextCompactMiddleware
+from agent_context import AgentContextCompactMiddleware, XuAgentState
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent_memory import AgentMemoryMiddleware
 from agent_permissions import AgentPermissionMiddleware
@@ -52,8 +52,8 @@ PROMPT_CONTEXT = build_prompt_context(
 
 middleware = [
     AgentRecoveryMiddleware(),
-    AgentContextCompactMiddleware(),
     AgentMemoryMiddleware(),
+    AgentContextCompactMiddleware(),
     AgentPermissionMiddleware(),
 ]
 
@@ -65,5 +65,6 @@ graph = create_agent(
     model=f"{LLM_ADAPTER_TYPE}:{LLM_MODEL}",
     tools=ALL_TOOLS,
     middleware=middleware,
+    state_schema=XuAgentState,
     system_prompt=get_system_prompt(PROMPT_CONTEXT),
 )
