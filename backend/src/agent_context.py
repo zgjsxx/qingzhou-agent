@@ -34,6 +34,8 @@ class ContextUsage(TypedDict):
 
 
 class XuAgentState(AgentState):
+    # 扩展 LangChain 默认 AgentState，保存最近一次模型调用的上下文 token 统计。
+    # 前端从 graph state 读取该字段，用于在对话框中显示当前上下文占用量。
     context_usage: NotRequired[ContextUsage]
 
 
