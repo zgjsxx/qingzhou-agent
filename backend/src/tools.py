@@ -100,7 +100,16 @@ def _select_shell(shell: str) -> tuple[str, list[str]]:
         executable = shutil.which("pwsh") or shutil.which("powershell")
         if not executable:
             raise ValueError("PowerShell is not available on this machine.")
-        return "powershell", [executable, "-NoProfile", "-NonInteractive", "-Command"]
+        # 修复 PowerShell 子进程输出乱码问题：Windows 默认使用 GBK 编码，导致中文输出
+        # 在 subprocess 中显示为乱码。通过在每条命令前注入 UTF-8 编码设置，确保输出
+        # 以 UTF-8 编码返回给 Python（subprocess 已配置 encoding="utf-8"）。
+        # chcp 65001 切换控制台代码页为 UTF-8，$OutputEncoding 和
+        # [Console]::OutputEncoding 确保 PowerShell 管道输出也使用 UTF-8。
+        utf8_preamble = (
+            "chcp 65001 | Out-Null; "
+            "$OutputEncoding=[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+        )
+        return "powershell", [executable, "-NoProfile", "-NonInteractive", "-Command", utf8_preamble]
 
     if requested == "cmd":
         executable = shutil.which("cmd")
