@@ -207,6 +207,13 @@ def _popen_kwargs() -> dict[str, object]:
     return {"start_new_session": True}
 
 
+def _shell_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    return env
+
+
 def _kill_process_tree(process: subprocess.Popen[str]) -> None:
     if process.poll() is not None:
         return
@@ -245,6 +252,7 @@ def _run_shell_process(
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_shell_env(),
         **_popen_kwargs(),
     )
 
@@ -282,6 +290,7 @@ def _run_shell_process_streaming(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        env=_shell_env(),
         **_popen_kwargs(),
     )
     started_at = time.time()
@@ -1109,7 +1118,10 @@ ALL_TOOLS = [
     load_skill,
     compact,
     remember,
-    task,
+    # Temporarily disabled: synchronous subagents are hard to debug when their
+    # internal tools trigger interrupts/approval flows. Keep the implementation
+    # for a later, explicit subagent lifecycle.
+    # task,
     create_task,
     list_tasks,
     get_task,
