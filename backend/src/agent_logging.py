@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import time
 import traceback
 from datetime import datetime, timezone
-from logging.handlers import RotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -60,14 +61,22 @@ def _build_logger() -> logging.Logger:
     logger.propagate = False
 
     if not logger.handlers:
-        handler = RotatingFileHandler(
+        # Use QueueHandler+QueueListener to avoid blocking I/O in the async event loop.
+        # The RotatingFileHandler runs in a background thread via the listener.
+        log_queue: queue.Queue[logging.LogRecord] = queue.Queue(-1)
+        file_handler = RotatingFileHandler(
             LOG_FILE,
             maxBytes=MAX_BYTES,
             backupCount=BACKUP_COUNT,
             encoding="utf-8",
         )
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        logger.addHandler(handler)
+        file_handler.setFormatter(logging.Formatter("%(message)s"))
+
+        listener = QueueListener(log_queue, file_handler, respect_handler_level=True)
+        listener.start()
+
+        queue_handler = QueueHandler(log_queue)
+        logger.addHandler(queue_handler)
 
     return logger
 
