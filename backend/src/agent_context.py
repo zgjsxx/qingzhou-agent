@@ -41,6 +41,9 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
 DEFAULT_COMPACT_MARGIN_TOKENS = 13_000
 DEFAULT_COMPACT_KEEP_MESSAGES = 20
 DEFAULT_COMPACT_MAX_FAILURES = 3
+DEFAULT_SNIP_TRIGGER_MESSAGES = 50
+DEFAULT_SNIP_KEEP_HEAD_MESSAGES = 3
+DEFAULT_SNIP_KEEP_TAIL_MESSAGES = 47
 
 
 class ContextUsage(TypedDict):
@@ -61,11 +64,23 @@ class CompactMetadata(TypedDict):
     failures: int
 
 
+class SnipCompactMetadata(TypedDict):
+    last_snipped_at: str
+    before_message_count: int
+    after_message_count: int
+    removed_message_count: int
+    keep_head_messages: int
+    keep_tail_messages: int
+    actual_tail_messages: int
+    tail_expanded_for_tool_pair: bool
+
+
 class XuAgentState(AgentState):
     # 扩展 LangChain 默认 AgentState，保存最近一次模型调用的上下文 token 统计。
     # 前端从 graph state 读取该字段，用于在对话框中显示当前上下文占用量。
     context_usage: NotRequired[ContextUsage]
     compact_metadata: NotRequired[CompactMetadata]
+    snip_compact_metadata: NotRequired[SnipCompactMetadata]
     compact_failure_count: NotRequired[int]
 
 
@@ -89,6 +104,13 @@ def is_context_compaction_enabled() -> bool:
     if _bool_env("DISABLE_COMPACT", False) or _bool_env("DISABLE_AUTO_COMPACT", False):
         return False
     return _bool_env("AGENT_AUTO_COMPACT_ENABLED", True)
+
+
+def is_snip_compaction_enabled() -> bool:
+    """Return whether lightweight message-count based compaction is enabled."""
+    if _bool_env("DISABLE_COMPACT", False) or _bool_env("DISABLE_AUTO_COMPACT", False):
+        return False
+    return _bool_env("AGENT_SNIP_COMPACT_ENABLED", True)
 
 
 def _request_messages(request: ModelRequest) -> list[BaseMessage]:
@@ -203,6 +225,122 @@ def _should_auto_compact_state(state: Any) -> tuple[bool, int | None]:
 
 def _message_has_tool_calls(message: BaseMessage) -> bool:
     return isinstance(message, AIMessage) and bool(getattr(message, "tool_calls", None))
+
+
+def _message_tool_result_ids(message: BaseMessage) -> set[str]:
+    ids: set[str] = set()
+    if isinstance(message, ToolMessage):
+        tool_call_id = getattr(message, "tool_call_id", None)
+        if tool_call_id:
+            ids.add(str(tool_call_id))
+
+    content = getattr(message, "content", None)
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("type", "")).lower() != "tool_result":
+                continue
+            for key in ("tool_call_id", "tool_use_id", "id"):
+                value = block.get(key)
+                if value:
+                    ids.add(str(value))
+                    break
+    return ids
+
+
+def _message_tool_call_ids(message: BaseMessage) -> set[str]:
+    ids: set[str] = set()
+    if isinstance(message, AIMessage):
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            if isinstance(tool_call, dict) and tool_call.get("id"):
+                ids.add(str(tool_call["id"]))
+
+    content = getattr(message, "content", None)
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("type", "")).lower() != "tool_use":
+                continue
+            value = block.get("id")
+            if value:
+                ids.add(str(value))
+    return ids
+
+
+def _find_previous_tool_call_message(
+    messages: list[BaseMessage],
+    before_index: int,
+    tool_result_ids: set[str],
+) -> int | None:
+    for index in range(before_index - 1, -1, -1):
+        if _message_tool_call_ids(messages[index]) & tool_result_ids:
+            return index
+    return None
+
+
+def _snip_tail_start(messages: list[BaseMessage], tail_start: int, min_start: int) -> tuple[int, bool]:
+    expanded = False
+    while tail_start > min_start:
+        tool_result_ids = _message_tool_result_ids(messages[tail_start])
+        if not tool_result_ids:
+            break
+
+        tool_call_index = _find_previous_tool_call_message(messages, tail_start, tool_result_ids)
+        if tool_call_index is None or tool_call_index < min_start or tool_call_index >= tail_start:
+            break
+
+        tail_start = tool_call_index
+        expanded = True
+    return tail_start, expanded
+
+
+def _snip_compact_state(state: Any) -> dict[str, Any]:
+    if not is_snip_compaction_enabled():
+        return {}
+
+    messages = list(_state_value(state, "messages", []) or [])
+    trigger_count = _int_env("AGENT_SNIP_TRIGGER_MESSAGES", DEFAULT_SNIP_TRIGGER_MESSAGES)
+    if len(messages) <= trigger_count:
+        return {}
+
+    keep_head = _int_env("AGENT_SNIP_KEEP_HEAD_MESSAGES", DEFAULT_SNIP_KEEP_HEAD_MESSAGES, minimum=0)
+    keep_tail = _int_env("AGENT_SNIP_KEEP_TAIL_MESSAGES", DEFAULT_SNIP_KEEP_TAIL_MESSAGES, minimum=0)
+    if keep_head + keep_tail >= len(messages):
+        return {}
+
+    tail_start = max(len(messages) - keep_tail, keep_head)
+    tail_start, tail_expanded = _snip_tail_start(messages, tail_start, keep_head)
+    removed_count = max(tail_start - keep_head, 0)
+    if removed_count <= 0:
+        return {}
+
+    snipped_messages = [*messages[:keep_head], *messages[tail_start:]]
+    metadata: SnipCompactMetadata = {
+        "last_snipped_at": datetime.now(timezone.utc).isoformat(),
+        "before_message_count": len(messages),
+        "after_message_count": len(snipped_messages),
+        "removed_message_count": removed_count,
+        "keep_head_messages": keep_head,
+        "keep_tail_messages": keep_tail,
+        "actual_tail_messages": len(messages) - tail_start,
+        "tail_expanded_for_tool_pair": tail_expanded,
+    }
+    log_event(
+        "context.snip_compact",
+        before_message_count=len(messages),
+        after_message_count=len(snipped_messages),
+        removed_message_count=removed_count,
+        keep_head_messages=keep_head,
+        keep_tail_messages=keep_tail,
+        actual_tail_messages=len(messages) - tail_start,
+        tail_expanded_for_tool_pair=tail_expanded,
+    )
+    return {
+        "messages": _replace_messages_update(snipped_messages),
+        "snip_compact_metadata": metadata,
+    }
 
 
 def _split_messages_for_compaction(messages: list[BaseMessage]) -> tuple[list[BaseMessage], list[BaseMessage]]:
@@ -466,14 +604,16 @@ class AgentContextCompactMiddleware(AgentMiddleware):
 
     def before_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
         try:
-            update = _compact_state(state)
+            update = _snip_compact_state(state) or _compact_state(state)
         except Exception as exc:
             update = _compact_failure_update(state, exc)
         return update or None
 
     async def abefore_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
         try:
-            update = await _acompact_state(state)
+            update = _snip_compact_state(state)
+            if not update:
+                update = await _acompact_state(state)
         except Exception as exc:
             update = _compact_failure_update(state, exc)
         return update or None
