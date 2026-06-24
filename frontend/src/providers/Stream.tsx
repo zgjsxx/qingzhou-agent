@@ -101,6 +101,7 @@ const StreamSession = ({
     apiUrl,
     apiKey: apiKey ?? undefined,
     assistantId,
+    throttle: 50,
     ...(authScheme && {
       defaultHeaders: {
         "X-Auth-Scheme": authScheme,

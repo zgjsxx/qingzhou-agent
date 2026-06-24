@@ -1,6 +1,6 @@
 import { AIMessage, ToolMessage } from "@langchain/langgraph-sdk";
-import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useMemo } from "react";
+import { motion } from "framer-motion";
 import { ChevronDown, ChevronUp } from "lucide-react";
 
 const TOOL_ARG_PREVIEW_CHARS = 100;
@@ -53,10 +53,45 @@ function getArgPreview(value: unknown): { text: string; expandable: boolean } {
   return { text: preview.text, expandable: preview.truncated };
 }
 
+const EXPAND_MAX_CHARS = 2000;
+
+/** Scan rawStr for first 4 line breaks within 500 chars, without allocating a full split array. */
+function getCollapsedPreview(rawStr: string): { preview: string; truncated: boolean } {
+  let lineCount = 0;
+  let lastBreak = -1;
+  for (let i = 0; i < rawStr.length && i < 500; i++) {
+    if (rawStr[i] === "\n") {
+      lineCount++;
+      lastBreak = i;
+      if (lineCount >= 4) break;
+    }
+  }
+
+  if (rawStr.length <= 500 && lineCount < 4) {
+    return { preview: rawStr, truncated: false };
+  }
+
+  if (rawStr.length > 500) {
+    return { preview: rawStr.slice(0, 500) + "...", truncated: true };
+  }
+
+  // <= 500 chars but >= 4 lines
+  return { preview: rawStr.slice(0, lastBreak) + "\n...", truncated: true };
+}
+
 function stringifyExpandedArg(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    if (value.length > EXPAND_MAX_CHARS) {
+      return value.slice(0, EXPAND_MAX_CHARS) + `...（共 ${value.length} 字符）`;
+    }
+    return value;
+  }
   try {
-    return JSON.stringify(value, null, 2);
+    const str = JSON.stringify(value, null, 2);
+    if (str.length > EXPAND_MAX_CHARS) {
+      return str.slice(0, EXPAND_MAX_CHARS) + `...（共 ${str.length} 字符）`;
+    }
+    return str;
   } catch {
     return String(value);
   }
@@ -65,8 +100,12 @@ function stringifyExpandedArg(value: unknown): string {
 function ToolArgValue({ value }: { value: unknown }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const preview = getArgPreview(value);
-  const displayedText = isExpanded ? stringifyExpandedArg(value) : preview.text;
   const canExpand = preview.expandable;
+  const expandedText = useMemo(
+    () => isExpanded ? stringifyExpandedArg(value) : null,
+    [isExpanded, value],
+  );
+  const displayedText = isExpanded ? expandedText! : preview.text;
 
   return (
     <div className="flex flex-col gap-1">
@@ -141,30 +180,41 @@ export function ToolCalls({
 export function ToolResult({ message }: { message: ToolMessage }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  let parsedContent: any;
-  let isJsonContent = false;
+  // Collapsed state: only slice raw string, no expensive parse/stringify
+  const raw = message.content;
+  const rawStr = typeof raw === "string" ? raw : String(raw);
+  const { preview: collapsedPreview, truncated: shouldTruncate } = getCollapsedPreview(rawStr);
 
-  try {
-    if (typeof message.content === "string") {
-      parsedContent = JSON.parse(message.content);
-      isJsonContent = isComplexValue(parsedContent);
+  // Expanded state: full parse + stringify (lazy — only computed when expanded)
+  const expanded = useMemo(() => {
+    if (!isExpanded) return null;
+
+    let parsed: any;
+    let isJson = false;
+
+    if (typeof raw === "string") {
+      const first = raw.trim()[0];
+      if (first === "{" || first === "[") {
+        try {
+          parsed = JSON.parse(raw);
+          isJson = isComplexValue(parsed);
+        } catch {
+          parsed = raw;
+        }
+      } else {
+        parsed = raw;
+      }
+    } else {
+      parsed = raw;
     }
-  } catch {
-    // Content is not JSON, use as is
-    parsedContent = message.content;
-  }
 
-  const contentStr = isJsonContent
-    ? JSON.stringify(parsedContent, null, 2)
-    : String(message.content);
-  const contentLines = contentStr.split("\n");
-  const shouldTruncate = contentLines.length > 4 || contentStr.length > 500;
-  const displayedContent =
-    shouldTruncate && !isExpanded
-      ? contentStr.length > 500
-        ? contentStr.slice(0, 500) + "..."
-        : contentLines.slice(0, 4).join("\n") + "\n..."
-      : contentStr;
+    const str = isJson ? JSON.stringify(parsed, null, 2) : rawStr;
+    return { parsedContent: parsed, isJsonContent: isJson, contentStr: str };
+  }, [isExpanded, raw, rawStr]);
+
+  const isJsonContent = expanded?.isJsonContent ?? false;
+  const parsedContent = expanded?.parsedContent;
+  const displayedContent = expanded?.contentStr ?? collapsedPreview;
 
   return (
     <div className="mx-auto grid max-w-3xl grid-rows-[1fr_auto] gap-2">
@@ -188,24 +238,8 @@ export function ToolResult({ message }: { message: ToolMessage }) {
             )}
           </div>
         </div>
-        <motion.div
-          className="min-w-full bg-gray-100"
-          initial={false}
-          animate={{ height: "auto" }}
-          transition={{ duration: 0.3 }}
-        >
+        <div className="min-w-full bg-gray-100">
           <div className="p-3">
-            <AnimatePresence
-              mode="wait"
-              initial={false}
-            >
-              <motion.div
-                key={isExpanded ? "expanded" : "collapsed"}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ duration: 0.2 }}
-              >
                 {isJsonContent ? (
                   <table className="min-w-full divide-y divide-gray-200">
                     <tbody className="divide-y divide-gray-200">
@@ -240,13 +274,8 @@ export function ToolResult({ message }: { message: ToolMessage }) {
                 ) : (
                   <code className="block text-sm">{displayedContent}</code>
                 )}
-              </motion.div>
-            </AnimatePresence>
           </div>
-          {((shouldTruncate && !isJsonContent) ||
-            (isJsonContent &&
-              Array.isArray(parsedContent) &&
-              parsedContent.length > 5)) && (
+          {shouldTruncate && (
             <motion.button
               onClick={() => setIsExpanded(!isExpanded)}
               className="flex w-full cursor-pointer items-center justify-center border-t-[1px] border-gray-200 py-2 text-gray-500 transition-all duration-200 ease-in-out hover:bg-gray-50 hover:text-gray-600"
@@ -257,7 +286,7 @@ export function ToolResult({ message }: { message: ToolMessage }) {
               {isExpanded ? <ChevronUp /> : <ChevronDown />}
             </motion.button>
           )}
-        </motion.div>
+        </div>
       </div>
     </div>
   );

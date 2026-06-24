@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { ReactNode, useEffect, useRef } from "react";
+import { ReactNode, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
@@ -262,6 +262,11 @@ export function Thread() {
   const hasNoAIOrToolMessages = !messages.find(
     (m) => m.type === "ai" || m.type === "tool",
   );
+  const threadInterrupt = stream.interrupt;
+  const handleSetBranch = useCallback(
+    (branch: string) => stream.setBranch(branch),
+    [stream],
+  );
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -422,6 +427,14 @@ export function Thread() {
                           message={message}
                           isLoading={isLoading}
                           handleRegenerate={handleRegenerate}
+                          isLastMessage={messages[messages.length - 1].id === message.id}
+                          hasNoAIOrToolMessages={hasNoAIOrToolMessages}
+                          threadInterrupt={threadInterrupt}
+                          hideToolCalls={hideToolCalls ?? false}
+                          parentCheckpoint={message ? stream.getMessagesMetadata(message)?.firstSeenState?.parent_checkpoint : undefined}
+                          branch={message ? stream.getMessagesMetadata(message)?.branch : undefined}
+                          branchOptions={message ? stream.getMessagesMetadata(message)?.branchOptions : undefined}
+                          onSetBranch={handleSetBranch}
                         />
                       ),
                     )}
@@ -433,6 +446,14 @@ export function Thread() {
                       message={undefined}
                       isLoading={isLoading}
                       handleRegenerate={handleRegenerate}
+                      isLastMessage={true}
+                      hasNoAIOrToolMessages={hasNoAIOrToolMessages}
+                      threadInterrupt={threadInterrupt}
+                      hideToolCalls={hideToolCalls ?? false}
+                      parentCheckpoint={undefined}
+                      branch={undefined}
+                      branchOptions={undefined}
+                      onSetBranch={handleSetBranch}
                     />
                   )}
                   {isLoading && !firstTokenReceived && (

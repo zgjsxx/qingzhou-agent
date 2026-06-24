@@ -9,22 +9,16 @@ import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { cn } from "@/lib/utils";
 import { ToolCalls, ToolResult } from "./tool-calls";
 import { MessageContentComplex } from "@langchain/core/messages";
-import { Fragment } from "react/jsx-runtime";
+import { Fragment, memo } from "react";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
-import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
 import { useArtifact } from "../artifact";
 
-function CustomComponent({
-  message,
-  thread,
-}: {
-  message: Message;
-  thread: ReturnType<typeof useStreamContext>;
-}) {
+function CustomComponent({ message }: { message: Message }) {
   const artifact = useArtifact();
-  const { values } = useStreamContext();
+  const thread = useStreamContext();
+  const { values } = thread;
   const customComponents = values.ui?.filter(
     (ui) => ui.metadata?.message_id === message.id,
   );
@@ -99,32 +93,75 @@ function Interrupt({
   );
 }
 
-export function AssistantMessage({
-  message,
-  isLoading,
-  handleRegenerate,
-}: {
+interface AssistantMessageProps {
   message: Message | undefined;
   isLoading: boolean;
   handleRegenerate: (parentCheckpoint: Checkpoint | null | undefined) => void;
-}) {
+  isLastMessage: boolean;
+  hasNoAIOrToolMessages: boolean;
+  threadInterrupt: unknown;
+  hideToolCalls: boolean;
+  parentCheckpoint: Checkpoint | null | undefined;
+  branch: string | undefined;
+  branchOptions: string[] | undefined;
+  onSetBranch: (branch: string) => void;
+}
+
+function areAssistantMessagePropsEqual(
+  prev: AssistantMessageProps,
+  next: AssistantMessageProps,
+): boolean {
+  // The last message during streaming always re-renders —
+  // content/tool_calls change per token, memo comparison would miss updates.
+  if (next.isLastMessage && next.isLoading) return false;
+
+  if (prev.isLoading !== next.isLoading) return false;
+  if (prev.isLastMessage !== next.isLastMessage) return false;
+  if (prev.hasNoAIOrToolMessages !== next.hasNoAIOrToolMessages) return false;
+  if (prev.hideToolCalls !== next.hideToolCalls) return false;
+  if (prev.threadInterrupt !== next.threadInterrupt) return false;
+  if (prev.parentCheckpoint !== next.parentCheckpoint) return false;
+  if (prev.branch !== next.branch) return false;
+  if (prev.branchOptions !== next.branchOptions) return false;
+
+  // Skip function props — handleRegenerate and onSetBranch change reference
+  // but have stable behavior (they always operate on the same StreamManager)
+
+  // Compare message content
+  if (prev.message === next.message) return true;
+  if (!prev.message && !next.message) return true;
+  if (!prev.message || !next.message) return false;
+
+  if (prev.message.id !== next.message.id) return false;
+  if (prev.message.type !== next.message.type) return false;
+  if (getContentString(prev.message.content) !== getContentString(next.message.content))
+    return false;
+
+  // For tool messages
+  if (prev.message.type === "tool") {
+    if ((prev.message as any).name !== (next.message as any).name) return false;
+    if ((prev.message as any).tool_call_id !== (next.message as any).tool_call_id)
+      return false;
+  }
+
+  return true;
+}
+
+export const AssistantMessage = memo(function AssistantMessage({
+  message,
+  isLoading,
+  handleRegenerate,
+  isLastMessage,
+  hasNoAIOrToolMessages,
+  threadInterrupt,
+  hideToolCalls,
+  parentCheckpoint,
+  branch,
+  branchOptions,
+  onSetBranch,
+}: AssistantMessageProps) {
   const content = message?.content ?? [];
   const contentString = getContentString(content);
-  const [hideToolCalls] = useQueryState(
-    "hideToolCalls",
-    parseAsBoolean.withDefault(false),
-  );
-
-  const thread = useStreamContext();
-  const isLastMessage =
-    thread.messages[thread.messages.length - 1].id === message?.id;
-  const hasNoAIOrToolMessages = !thread.messages.find(
-    (m) => m.type === "ai" || m.type === "tool",
-  );
-  const meta = message ? thread.getMessagesMetadata(message) : undefined;
-  const threadInterrupt = thread.interrupt;
-
-  const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
   const anthropicStreamedToolCalls = Array.isArray(content)
     ? parseAnthropicStreamedToolCalls(content)
     : undefined;
@@ -183,7 +220,6 @@ export function AssistantMessage({
             {message && (
               <CustomComponent
                 message={message}
-                thread={thread}
               />
             )}
             <Interrupt
@@ -198,9 +234,9 @@ export function AssistantMessage({
               )}
             >
               <BranchSwitcher
-                branch={meta?.branch}
-                branchOptions={meta?.branchOptions}
-                onSelect={(branch) => thread.setBranch(branch)}
+                branch={branch}
+                branchOptions={branchOptions}
+                onSelect={onSetBranch}
                 isLoading={isLoading}
               />
               <CommandBar
@@ -215,7 +251,7 @@ export function AssistantMessage({
       </div>
     </div>
   );
-}
+}, areAssistantMessagePropsEqual);
 
 export function AssistantMessageLoading() {
   return (
