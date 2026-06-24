@@ -11,7 +11,8 @@ import asyncio
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, NotRequired, TypedDict
+from typing import Any
+from typing_extensions import NotRequired, TypedDict
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import (
