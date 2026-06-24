@@ -170,6 +170,13 @@ PROMPT_SECTIONS = {
         "可用技能目录如下，只包含名称和简要说明；需要使用某个技能时，"
         "先调用 load_skill(name) 获取完整 SKILL.md 内容，不要假设你已经知道完整规则。"
     ),
+    "download_links": (
+        "当你生成了用户需要下载的结果文件（如 CSV、PDF、脚本等），"
+        "在回复末尾为每个文件提供一个可点击的下载链接，格式为："
+        "[下载 文件名]({frontend_url}/api/local/downloads/相对路径)"
+        "其中相对路径是文件在工作目录下的相对路径（如 output/data.csv）。"
+        "只对最终产出物提供下载链接，中间临时文件不需要。"
+    ),
 }
 
 _LAST_CONTEXT_KEY: str | None = None
@@ -190,12 +197,14 @@ def build_prompt_context(
     tools: list[Any],
     skill_catalog: str,
     workspace: str | Path | None = None,
+    frontend_url: str = "",
 ) -> dict[str, Any]:
     """Build deterministic prompt context from current runtime state."""
     return {
         "tool_names": _tool_names(tools),
         "skill_catalog": skill_catalog.strip(),
         "workspace": str(workspace) if workspace else "",
+        "frontend_url": frontend_url.strip(),
     }
 
 
@@ -223,6 +232,12 @@ def assemble_system_prompt(context: dict[str, Any]) -> str:
     skill_catalog = str(context.get("skill_catalog", "")).strip()
     if "load_skill" in tool_names and skill_catalog:
         sections.append(f"{PROMPT_SECTIONS['skills']}\n{skill_catalog}")
+
+    frontend_url = str(context.get("frontend_url", "")).strip()
+    if frontend_url and {"write_file", "run_shell_command"} & tool_names:
+        sections.append(
+            PROMPT_SECTIONS["download_links"].replace("{frontend_url}", frontend_url)
+        )
 
     workspace = str(context.get("workspace", "")).strip()
     if workspace:

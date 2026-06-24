@@ -22,6 +22,7 @@ LLM_ADAPTER_TYPE = os.getenv("LLM_ADAPTER_TYPE", config_str("llm", "adapterType"
 LLM_MODEL = os.getenv("LLM_MODEL", config_str("llm", "model", "glm-5.1")).strip()
 LLM_API_KEY = os.getenv("LLM_API_KEY", config_str("llm", "apiKey", "")).strip()
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", config_str("llm", "baseUrl", "")).strip()
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").strip()
 
 
 def configure_llm_provider_env() -> None:
@@ -47,6 +48,7 @@ PROMPT_CONTEXT = build_prompt_context(
     tools=ALL_TOOLS,
     skill_catalog=SKILL_CATALOG,
     workspace=Path.cwd(),
+    frontend_url=FRONTEND_URL,
 )
 
 middleware = [
