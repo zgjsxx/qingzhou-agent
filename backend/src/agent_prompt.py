@@ -173,8 +173,11 @@ PROMPT_SECTIONS = {
     "download_links": (
         "当你生成了用户需要下载的结果文件（如 CSV、PDF、脚本等），"
         "在回复末尾为每个文件提供一个可点击的下载链接，格式为："
-        "[下载 文件名]({frontend_url}/api/local/downloads/相对路径)"
-        "其中相对路径是文件在工作目录下的相对路径（如 output/data.csv）。"
+        "[下载 文件名]({frontend_url}/api/local/downloads/相对路径)\n"
+        "其中相对路径是文件在工作目录下的相对路径。\n"
+        "示例：文件路径为 output/高特测试报表.csv，"
+        "则下载链接为 [下载 高特测试报表.csv]({frontend_url}/api/local/downloads/output/高特测试报表.csv)\n"
+        "注意：链接必须包含 /api/local/downloads/ 前缀，不能直接使用文件路径作为 URL。\n"
         "只对最终产出物提供下载链接，中间临时文件不需要。"
     ),
 }

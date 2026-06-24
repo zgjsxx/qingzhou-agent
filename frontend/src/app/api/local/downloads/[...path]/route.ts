@@ -34,6 +34,19 @@ function getMimeType(filename: string): string {
   return MIME_MAP[ext] || "application/octet-stream";
 }
 
+function getAsciiFallback(filename: string): string {
+  return filename.replace(/[^\x20-\x7E]/g, "_") || "download";
+}
+
+function formatContentDisposition(filename: string): string {
+  const asciiFallback = getAsciiFallback(filename);
+  const encoded = encodeURIComponent(filename);
+  if (asciiFallback === filename) {
+    return `attachment; filename="${filename}"`;
+  }
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
@@ -45,7 +58,8 @@ export async function GET(
 
   // Resolve against backend directory and ensure no path traversal
   const filePath = path.resolve(backendDir, relativePath);
-  if (!filePath.startsWith(backendDir)) {
+  const rel = path.relative(backendDir, filePath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return NextResponse.json({ error: "path traversal denied" }, { status: 403 });
   }
 
@@ -77,7 +91,7 @@ export async function GET(
     status: 200,
     headers: {
       "Content-Type": mimeType,
-      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Disposition": formatContentDisposition(filename),
       "Content-Length": String(buffer.length),
     },
   });
