@@ -7,3 +7,4 @@ logs/
 .tasks/
 .agent_outputs/
 .agent_uploads/
+.agent_cron/

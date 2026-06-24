@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 
 from agent_config import config_str
 from agent_context import AgentContextCompactMiddleware, XuAgentState
+from agent_cron import start_cron_scheduler
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent_memory import AgentMemoryMiddleware
 from agent_permissions import AgentPermissionMiddleware
@@ -68,3 +69,5 @@ graph = create_agent(
     state_schema=XuAgentState,
     system_prompt=get_system_prompt(PROMPT_CONTEXT),
 )
+
+start_cron_scheduler()

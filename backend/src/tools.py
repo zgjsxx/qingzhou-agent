@@ -16,6 +16,10 @@ from pathlib import Path
 
 from langchain.tools import tool
 
+from agent_cron import cancel_job as cancel_cron_job
+from agent_cron import is_cron_enabled
+from agent_cron import list_jobs as list_cron_jobs
+from agent_cron import schedule_job as schedule_cron_job
 from agent_config import config_int, config_str
 from agent_context import MANUAL_COMPACT_MARKER
 from agent_memory import write_memory_file
@@ -782,6 +786,86 @@ def complete_task(task_id: str) -> str:
     return "\n".join(output)
 
 
+@tool
+def schedule_cron(cron: str, prompt: str, recurring: bool = True, durable: bool = True) -> str:
+    """Schedule a prompt to run automatically in the current thread.
+
+    Args:
+        cron: Five-field cron expression: minute hour day-of-month month day-of-week.
+        prompt: Prompt to inject into this same thread when the cron fires.
+        recurring: True for recurring jobs, false for one-shot jobs.
+        durable: True to persist the job across backend restarts.
+    """
+    if not is_cron_enabled():
+        return "Error: cron scheduler is disabled. Set AGENT_CRON_ENABLED=true in backend/.env and restart the backend."
+
+    thread_id = CURRENT_TOOL_THREAD_ID.get()
+    result = schedule_cron_job(
+        thread_id=thread_id,
+        cron=cron,
+        prompt=prompt,
+        recurring=recurring,
+        durable=durable,
+    )
+    if isinstance(result, str):
+        return f"Error: {result}"
+    return (
+        "Scheduled cron job.\n"
+        f"id: {result.id}\n"
+        f"thread: {result.thread_id}\n"
+        f"cron: {result.cron}\n"
+        f"recurring: {result.recurring}\n"
+        f"durable: {result.durable}\n"
+        f"prompt: {result.prompt}"
+    )
+
+
+@tool
+def list_crons(current_thread_only: bool = True) -> str:
+    """List scheduled cron jobs.
+
+    Args:
+        current_thread_only: If true, only list jobs bound to the current thread.
+    """
+    scheduler_note = ""
+    if not is_cron_enabled():
+        scheduler_note = (
+            "Warning: cron scheduler is disabled. Set AGENT_CRON_ENABLED=true "
+            "in backend/.env and restart the backend.\n\n"
+        )
+
+    thread_id = CURRENT_TOOL_THREAD_ID.get() if current_thread_only else None
+    jobs = list_cron_jobs(thread_id=thread_id)
+    if not jobs:
+        return f"{scheduler_note}No scheduled cron jobs."
+    lines = []
+    for job in jobs:
+        status = "enabled" if job.enabled else "disabled"
+        recurrence = "recurring" if job.recurring else "one-shot"
+        durability = "durable" if job.durable else "session"
+        lines.append(
+            f"{job.id}: '{job.cron}' [{status}, {recurrence}, {durability}]\n"
+            f"  thread: {job.thread_id}\n"
+            f"  last_fired_at: {job.last_fired_at or '(never)'}\n"
+            f"  prompt: {job.prompt}"
+        )
+    body = "\n\n".join(lines)
+    return f"{scheduler_note}{body}"
+
+
+@tool
+def cancel_cron(job_id: str) -> str:
+    """Cancel a scheduled cron job.
+
+    Args:
+        job_id: Cron job ID returned by schedule_cron or list_crons.
+    """
+    result = cancel_cron_job(job_id)
+    if result.startswith("job not found") or result.endswith("is required"):
+        return f"Error: {result}"
+    return result
+
+
 def _read_file_impl(path: str, cwd: str = "", limit: int | None = None) -> str:
     try:
         root, file_path = _resolve_safe_path(path, cwd)
@@ -1136,6 +1220,9 @@ ALL_TOOLS = [
     get_task,
     claim_task,
     complete_task,
+    schedule_cron,
+    list_crons,
+    cancel_cron,
     read_file,
     write_file,
     edit_file,
