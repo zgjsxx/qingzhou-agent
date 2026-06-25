@@ -42,6 +42,8 @@ BACKGROUND_DIR = BACKEND_DIR / ".agent_outputs" / "background"
 SSH_KEY_DIR = BACKEND_DIR / ".agent_outputs" / "ssh_keys"
 BACKGROUND_DEFAULT_TIMEOUT_SECONDS = 1800
 BACKGROUND_TASKS_LOCK = threading.Lock()
+BACKGROUND_PROCESSES: dict[str, subprocess.Popen[str]] = {}
+BACKGROUND_CANCEL_REQUESTS: set[str] = set()
 TODO_STATUSES = {"pending", "in_progress", "completed"}
 DEFAULT_TODO_THREAD_ID = "__default__"
 CURRENT_TOOL_THREAD_ID: ContextVar[str] = ContextVar(
@@ -252,6 +254,36 @@ def _kill_process_tree(process: subprocess.Popen[str]) -> None:
         pass
 
 
+def _kill_process_tree_by_pid(pid: int) -> bool:
+    if pid <= 0:
+        return False
+
+    if os.name == "nt":
+        try:
+            completed = subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            return completed.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            return True
+        except OSError:
+            return False
+
+
 def _run_shell_process(
     argv: list[str],
     cwd: str,
@@ -292,6 +324,8 @@ def _run_shell_process_streaming(
     cwd: str,
     timeout: int,
     log_path: Path,
+    task_id: str,
+    meta: dict[str, object],
 ) -> tuple[int | None, bool]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(
@@ -306,6 +340,10 @@ def _run_shell_process_streaming(
         env=_shell_env(),
         **_popen_kwargs(),
     )
+    with BACKGROUND_TASKS_LOCK:
+        BACKGROUND_PROCESSES[task_id] = process
+        meta["pid"] = process.pid
+        _write_background_meta(task_id, meta)
     started_at = time.time()
     timed_out = False
 
@@ -404,6 +442,7 @@ def _start_background_shell_command(
         "timeout_seconds": timeout_seconds,
         "started_at": started_at,
         "finished_at": None,
+        "pid": None,
         "exit_code": None,
         "timed_out": False,
         "log_path": str(log_path),
@@ -434,17 +473,28 @@ def _start_background_shell_command(
                 cwd=cwd,
                 timeout=timeout_seconds,
                 log_path=log_path,
+                task_id=task_id,
+                meta=meta,
             )
+            with BACKGROUND_TASKS_LOCK:
+                cancelled = task_id in BACKGROUND_CANCEL_REQUESTS
+                if not cancelled:
+                    try:
+                        current_meta = _read_background_meta(task_id)
+                    except (FileNotFoundError, OSError, json.JSONDecodeError):
+                        current_meta = {}
+                    cancelled = current_meta.get("status") == "cancel_requested"
             with log_path.open("a", encoding="utf-8", errors="replace") as handle:
                 handle.write(
                     "\n[agent background] finished\n"
                     f"exit_code: {returncode}\n"
                     f"timed_out: {timed_out}\n"
+                    f"cancelled: {cancelled}\n"
                     f"finished_at: {time.time()}\n"
                 )
             meta.update(
                 {
-                    "status": "timed_out" if timed_out else "completed",
+                    "status": "cancelled" if cancelled else "timed_out" if timed_out else "completed",
                     "finished_at": time.time(),
                     "exit_code": returncode,
                     "timed_out": timed_out,
@@ -457,6 +507,8 @@ def _start_background_shell_command(
                 handle.write(f"\n[agent background] Error: {exc}\n")
             meta.update({"status": "failed", "finished_at": time.time(), "error": str(exc)})
         with BACKGROUND_TASKS_LOCK:
+            BACKGROUND_PROCESSES.pop(task_id, None)
+            BACKGROUND_CANCEL_REQUESTS.discard(task_id)
             _write_background_meta(task_id, meta)
 
     thread = threading.Thread(target=worker, name=f"shell-bg-{task_id}", daemon=True)
@@ -1205,6 +1257,76 @@ def get_background_task(task_id: str, include_output: bool = True, max_output_ch
         return f"Error: {exc}"
 
 
+@tool
+def cancel_background_task(task_id: str) -> str:
+    """Cancel a running background shell task.
+
+    Args:
+        task_id: Background task ID returned by run_shell_command.
+    """
+    try:
+        meta = _read_background_meta(task_id)
+    except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as exc:
+        return f"Error: {exc}"
+
+    background_task_id = str(meta.get("id") or task_id)
+    status = str(meta.get("status") or "")
+    if status != "running":
+        return f"Background task {background_task_id} is {status or 'unknown'}, cannot cancel."
+
+    killed = False
+    has_live_worker = False
+    with BACKGROUND_TASKS_LOCK:
+        BACKGROUND_CANCEL_REQUESTS.add(background_task_id)
+        meta["status"] = "cancel_requested"
+        meta["cancel_requested_at"] = time.time()
+        process = BACKGROUND_PROCESSES.get(background_task_id)
+        if process is not None:
+            has_live_worker = True
+            _kill_process_tree(process)
+            killed = True
+        _write_background_meta(background_task_id, meta)
+
+    if not killed:
+        try:
+            pid = int(meta.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        killed = _kill_process_tree_by_pid(pid)
+
+    if not has_live_worker:
+        meta.update(
+            {
+                "status": "cancelled",
+                "finished_at": time.time(),
+                "exit_code": None,
+                "timed_out": False,
+            }
+        )
+        with BACKGROUND_TASKS_LOCK:
+            BACKGROUND_CANCEL_REQUESTS.discard(background_task_id)
+            _write_background_meta(background_task_id, meta)
+
+    log_path = Path(str(meta.get("log_path") or ""))
+    if log_path:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8", errors="replace") as handle:
+                handle.write(
+                    "\n[agent background] cancel requested\n"
+                    f"killed: {killed}\n"
+                    f"cancel_requested_at: {meta['cancel_requested_at']}\n"
+                )
+        except OSError:
+            pass
+
+    return (
+        f"Cancel requested for background task {background_task_id}.\n"
+        f"killed: {killed}\n"
+        "Use get_background_task to confirm final status."
+    )
+
+
 ALL_TOOLS = [
     get_system_cpu_usage,
     todo_write,
@@ -1231,4 +1353,5 @@ ALL_TOOLS = [
     run_ssh_command,
     list_background_tasks,
     get_background_task,
+    cancel_background_task,
 ]

@@ -156,6 +156,7 @@ PROMPT_SECTIONS = {
         "For slow shell commands such as installs, builds, tests, deploys, or long scans, prefer "
         "run_shell_command(..., run_in_background=True). It returns a background task id immediately. "
         "Use list_background_tasks and get_background_task to check status and read output later. "
+        "Use cancel_background_task to stop a running background task when the user asks to cancel it. "
         "When creating scripts for long-running work, include progress logging with flush=True or unbuffered "
         "execution, log each major phase and item/page/file being processed, write durable outputs to files, "
         "and avoid silent all-at-once loops. For PDF/table extraction or large scans, process incrementally "
@@ -227,7 +228,7 @@ def assemble_system_prompt(context: dict[str, Any]) -> str:
         sections.append(PROMPT_SECTIONS["memory"])
     if {"create_task", "list_tasks", "get_task", "claim_task", "complete_task"} <= tool_names:
         sections.append(PROMPT_SECTIONS["persistent_tasks"])
-    if {"list_background_tasks", "get_background_task", "run_shell_command"} <= tool_names:
+    if {"list_background_tasks", "get_background_task", "cancel_background_task", "run_shell_command"} <= tool_names:
         sections.append(PROMPT_SECTIONS["background_tasks"])
     if "run_ssh_command" in tool_names:
         sections.append(PROMPT_SECTIONS["ssh"])
