@@ -273,6 +273,10 @@ def _remember_approval(thread_id: str | None, signature: str) -> None:
 class AgentPermissionMiddleware(AgentMiddleware):
     """Block or gate tool calls before they execute."""
 
+    def __init__(self, interactive: bool = True) -> None:
+        super().__init__()
+        self.interactive = interactive
+
     def _check_request(self, request: Any) -> str | None:
         tool_name, args = _normalize_tool_call(getattr(request, "tool_call", None))
         decision = check_tool_permission(tool_name, args)
@@ -291,6 +295,15 @@ class AgentPermissionMiddleware(AgentMiddleware):
             return None
 
         if decision.behavior == "ask":
+            if not self.interactive:
+                log_event(
+                    "permission.noninteractive_denied",
+                    tool=tool_name,
+                    reason=decision.reason,
+                    tool_args=args,
+                )
+                return _permission_denied_message(tool_name, decision)
+
             signature = _tool_call_signature(tool_name, args)
             thread_id = _extract_thread_id(request)
             if _is_approved(thread_id, signature):

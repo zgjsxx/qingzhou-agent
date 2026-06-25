@@ -142,6 +142,10 @@ def log_event(event: str, **payload: Any) -> None:
 class AgentLoggingMiddleware(AgentMiddleware):
     """Log every agent run, model call, tool call, and exception to JSONL."""
 
+    def __init__(self, agent_name: str = "agent") -> None:
+        super().__init__()
+        self.agent_name = agent_name
+
     def before_agent(self, state: dict[str, Any], runtime: Any) -> None:
         self._log_agent_start(state)
 
@@ -157,12 +161,14 @@ class AgentLoggingMiddleware(AgentMiddleware):
     def _log_agent_start(self, state: Any) -> None:
         log_event(
             "agent.start",
+            agent_name=self.agent_name,
             messages=[_message_to_json(message) for message in _state_messages(state)],
         )
 
     def _log_agent_end(self, state: Any) -> None:
         log_event(
             "agent.end",
+            agent_name=self.agent_name,
             messages=[_message_to_json(message) for message in _state_messages(state)],
         )
 
@@ -193,6 +199,7 @@ class AgentLoggingMiddleware(AgentMiddleware):
         model_name = getattr(request.model, "model", None) or getattr(request.model, "model_name", None)
         log_event(
             "model.start",
+            agent_name=self.agent_name,
             model=repr(request.model),
             model_name=model_name,
             tool_names=[getattr(tool, "name", repr(tool)) for tool in request.tools],
@@ -205,6 +212,7 @@ class AgentLoggingMiddleware(AgentMiddleware):
     def _log_model_error(self, start: float, exc: Exception) -> None:
         log_event(
             "model.error",
+            agent_name=self.agent_name,
             elapsed_ms=round((time.perf_counter() - start) * 1000, 2),
             error=repr(exc),
             traceback=traceback.format_exc(),
@@ -214,6 +222,7 @@ class AgentLoggingMiddleware(AgentMiddleware):
         result = getattr(response, "result", [response])
         log_event(
             "model.end",
+            agent_name=self.agent_name,
             elapsed_ms=round((time.perf_counter() - start) * 1000, 2),
             result=[_message_to_json(message) for message in result],
             structured_response=_safe_json(getattr(response, "structured_response", None)),
@@ -245,12 +254,13 @@ class AgentLoggingMiddleware(AgentMiddleware):
         start = time.perf_counter()
         tool_call = _safe_json(request.tool_call)
         tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
-        log_event("tool.start", tool=tool_name, tool_call=tool_call)
+        log_event("tool.start", agent_name=self.agent_name, tool=tool_name, tool_call=tool_call)
         return start, tool_name
 
     def _log_tool_error(self, start: float, tool_name: str | None, exc: Exception) -> None:
         log_event(
             "tool.error",
+            agent_name=self.agent_name,
             tool=tool_name,
             elapsed_ms=round((time.perf_counter() - start) * 1000, 2),
             error=repr(exc),
@@ -260,6 +270,7 @@ class AgentLoggingMiddleware(AgentMiddleware):
     def _log_tool_end(self, start: float, tool_name: str | None, result: Any) -> None:
         log_event(
             "tool.end",
+            agent_name=self.agent_name,
             tool=tool_name,
             elapsed_ms=round((time.perf_counter() - start) * 1000, 2),
             result=_safe_json(result),

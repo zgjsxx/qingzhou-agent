@@ -139,7 +139,7 @@ PROMPT_SECTIONS = {
         "简单问答或一次性工具调用不需要使用 todo_write。"
     ),
     "subagent": (
-        "遇到复杂但相对独立的子问题时，可以调用 task(description) 启动子 Agent；"
+        "遇到复杂但相对独立的子问题时，可以调用 run_subagent(description) 启动子 Agent；"
         "子 Agent 会使用独立上下文完成任务并只返回结论。"
     ),
     "memory": (

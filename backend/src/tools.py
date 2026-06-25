@@ -698,7 +698,7 @@ def remember(name: str, type: str, description: str, body: str) -> str:
 
 
 @tool
-def task(description: str, cwd: str = "", max_steps: int | None = None) -> str:
+def run_subagent(description: str, cwd: str = "", max_steps: int | None = None) -> str:
     """Launch a synchronous subagent for an isolated complex subtask.
 
     The subagent uses a fresh conversation context and returns only its final
@@ -1214,7 +1214,7 @@ ALL_TOOLS = [
     # Temporarily disabled: synchronous subagents are hard to debug when their
     # internal tools trigger interrupts/approval flows. Keep the implementation
     # for a later, explicit subagent lifecycle.
-    # task,
+    run_subagent,
     create_task,
     list_tasks,
     get_task,
