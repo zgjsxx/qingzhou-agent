@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_permissions import AgentPermissionMiddleware
+from agent_permissions import AgentPermissionMiddleware, check_tool_permission
 
 
 class AgentPermissionMiddlewareTest(unittest.TestCase):
@@ -25,6 +25,12 @@ class AgentPermissionMiddlewareTest(unittest.TestCase):
         self.assertIsInstance(result, str)
         self.assertIn("requires user approval", result)
         interrupt.assert_not_called()
+
+    def test_rag_rebuild_requires_approval(self):
+        decision = check_tool_permission("rag_rebuild_index", {"data_dir": ""})
+
+        self.assertEqual(decision.behavior, "ask")
+        self.assertIn("RAG index", decision.reason)
 
 
 if __name__ == "__main__":

@@ -750,6 +750,31 @@ def remember(name: str, type: str, description: str, body: str) -> str:
 
 
 @tool
+def rag_rebuild_index(data_dir: str = "") -> str:
+    """Rebuild the local llama-index RAG index from documents.
+
+    Args:
+        data_dir: Optional document directory. Defaults to RAG_DOCS_DIR or backend/data/rag_docs.
+    """
+    from agent_rag import rag_rebuild_index as rebuild_index
+
+    return rebuild_index(data_dir=data_dir)
+
+
+@tool
+def rag_search(query: str, top_k: int = 5) -> str:
+    """Search the local llama-index RAG knowledge base and return ranked passages.
+
+    Args:
+        query: Search question or keywords.
+        top_k: Number of retrieved chunks to return.
+    """
+    from agent_rag import rag_search as search_index
+
+    return search_index(query=query, top_k=top_k)
+
+
+@tool
 def run_subagent(description: str, cwd: str = "", max_steps: int | None = None) -> str:
     """Launch a synchronous subagent for an isolated complex subtask.
 
@@ -1333,6 +1358,8 @@ ALL_TOOLS = [
     load_skill,
     compact,
     remember,
+    rag_rebuild_index,
+    rag_search,
     # Temporarily disabled: synchronous subagents are hard to debug when their
     # internal tools trigger interrupts/approval flows. Keep the implementation
     # for a later, explicit subagent lifecycle.

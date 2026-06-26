@@ -182,6 +182,9 @@ def _check_permission_rules(tool_name: str, args: dict[str, Any]) -> PermissionD
     if tool_name.startswith("mcp__"):
         return PermissionDecision("ask", "MCP tools require approval before execution.")
 
+    if tool_name == "rag_rebuild_index":
+        return PermissionDecision("ask", "Rebuilding the RAG index writes local index storage.")
+
     if tool_name in WRITE_TOOLS and _path_escapes_root(
         str(args.get("path", "")),
         str(args.get("cwd", "")),

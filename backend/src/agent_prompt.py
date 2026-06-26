@@ -146,6 +146,12 @@ PROMPT_SECTIONS = {
         "当用户明确要求记住长期偏好、约束、项目事实或参考线索时，"
         "调用 remember 保存到持久记忆。"
     ),
+    "rag": (
+        "当用户需要查询本地知识库、项目文档、PDF/Markdown/TXT/DOCX 资料时，可以使用 rag_search(query, top_k)。"
+        "rag_search 只返回检索到的证据片段，你需要基于这些片段组织最终回答；如果证据不足，要明确说明。"
+        "当用户要求更新知识库或索引不存在时，可以调用 rag_rebuild_index(data_dir) 重建索引；该操作会写入本地索引目录，"
+        "需要用户审批。"
+    ),
     "persistent_tasks": (
         "For large goals that need durable progress across conversations, use create_task, list_tasks, "
         "get_task, claim_task, and complete_task. Use blockedBy for dependencies, claim a task before "
@@ -231,6 +237,8 @@ def assemble_system_prompt(context: dict[str, Any]) -> str:
         sections.append(PROMPT_SECTIONS["subagent"])
     if "remember" in tool_names:
         sections.append(PROMPT_SECTIONS["memory"])
+    if {"rag_search", "rag_rebuild_index"} <= tool_names:
+        sections.append(PROMPT_SECTIONS["rag"])
     if {"create_task", "list_tasks", "get_task", "claim_task", "complete_task"} <= tool_names:
         sections.append(PROMPT_SECTIONS["persistent_tasks"])
     if {"list_background_tasks", "get_background_task", "cancel_background_task", "run_shell_command"} <= tool_names:

@@ -3,7 +3,17 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const skillsDir = path.join(repoRoot, "skills");
+const backendRoot = path.join(repoRoot, "backend");
+
+function resolveSkillsDir() {
+  const configured = process.env.AGENT_SKILLS_DIR?.trim();
+  if (!configured) {
+    return path.join(backendRoot, "skills");
+  }
+  return path.isAbsolute(configured)
+    ? configured
+    : path.resolve(backendRoot, configured);
+}
 
 function parseSkill(raw: string, directory: string) {
   const frontmatter = raw.startsWith("---") ? raw.split("---", 3)[1] : "";
@@ -29,6 +39,7 @@ function parseSkill(raw: string, directory: string) {
 }
 
 export async function GET() {
+  const skillsDir = resolveSkillsDir();
   try {
     const entries = await readdir(skillsDir, { withFileTypes: true });
     const skills = [];

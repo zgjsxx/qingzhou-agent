@@ -9,6 +9,7 @@ __pycache__/
 .env.local
 .mcp.json
 backend/.mcp.json
+backend/data/rag_storage/
 
 # IDE
 .idea/
