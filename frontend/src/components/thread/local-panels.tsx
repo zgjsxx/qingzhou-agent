@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Settings, Sparkles, XIcon } from "lucide-react";
+import { Plug, Settings, Sparkles, XIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
 import {
@@ -15,12 +15,21 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
 
-type PanelMode = "skills" | "config" | null;
+type PanelMode = "skills" | "plugins" | "config" | null;
 
 type Skill = {
   name: string;
   description: string;
   directory: string;
+};
+
+type Plugin = {
+  name: string;
+  type: string;
+  url: string;
+  enabled: boolean;
+  configured: boolean;
+  headerKeys: string[];
 };
 
 type AgentConfig = {
@@ -55,6 +64,7 @@ const emptyConfig: AgentConfig = {
 export function LocalPanels() {
   const [mode, setMode] = useState<PanelMode>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [config, setConfig] = useState<AgentConfig>(emptyConfig);
   const [saving, setSaving] = useState(false);
 
@@ -63,6 +73,13 @@ export function LocalPanels() {
       .then((res) => res.json())
       .then((data) => setSkills(Array.isArray(data.skills) ? data.skills : []))
       .catch(() => setSkills([]));
+
+    fetch("/api/local/plugins")
+      .then((res) => res.json())
+      .then((data) =>
+        setPlugins(Array.isArray(data.plugins) ? data.plugins : []),
+      )
+      .catch(() => setPlugins([]));
 
     fetch("/api/local/config")
       .then((res) => res.json())
@@ -128,6 +145,15 @@ export function LocalPanels() {
           <Settings className="size-4" />
           &#37197;&#32622;
         </Button>
+        <Button
+          variant={mode === "plugins" ? "secondary" : "ghost"}
+          size="sm"
+          className="w-full justify-start gap-2 px-3"
+          onClick={() => setMode("plugins")}
+        >
+          <Plug className="size-4" />
+          插件
+        </Button>
       </div>
 
       {mode && (
@@ -136,11 +162,17 @@ export function LocalPanels() {
             <div className="flex items-center justify-between border-b px-6 py-4">
               <div>
                 <h2 className="text-xl font-semibold">
-                  {mode === "skills" ? "Skills" : "Configuration"}
+                  {mode === "skills"
+                    ? "Skills"
+                    : mode === "plugins"
+                      ? "Plugins"
+                      : "Configuration"}
                 </h2>
                 <p className="text-muted-foreground text-sm">
                   {mode === "skills"
                     ? "Project skills available to the agent."
+                    : mode === "plugins"
+                      ? "Configured MCP plugins available to the main agent."
                     : "Local LLM and SSH settings saved outside git."}
                 </p>
               </div>
@@ -157,6 +189,8 @@ export function LocalPanels() {
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
               {mode === "skills" ? (
                 <SkillsPage skills={skills} />
+              ) : mode === "plugins" ? (
+                <PluginsPage plugins={plugins} />
               ) : (
                 <ConfigPage
                   config={config}
@@ -200,6 +234,65 @@ function SkillsPage({ skills }: { skills: Skill[] }) {
           </CardHeader>
           <CardContent>
             <p className="text-sm leading-6">{skill.description}</p>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function PluginsPage({ plugins }: { plugins: Plugin[] }) {
+  if (plugins.length === 0) {
+    return (
+      <Card className="max-w-xl">
+        <CardHeader>
+          <CardTitle>No plugins found</CardTitle>
+          <CardDescription>
+            Add MCP servers in backend/.mcp.json.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {plugins.map((plugin) => (
+        <Card
+          key={`${plugin.name}-${plugin.url}`}
+          className="gap-4 rounded-lg"
+        >
+          <CardHeader>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <CardTitle className="text-base">{plugin.name}</CardTitle>
+                <CardDescription>
+                  {plugin.configured ? "Configured" : "Example"} ·{" "}
+                  {plugin.enabled ? "Enabled" : "Disabled"}
+                </CardDescription>
+              </div>
+              <span className="bg-muted shrink-0 rounded-md px-2 py-1 text-xs font-medium uppercase">
+                {plugin.type}
+              </span>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <div>
+              <p className="text-muted-foreground text-xs font-medium">URL</p>
+              <p className="break-all font-mono text-xs leading-5">
+                {plugin.url || "(not set)"}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs font-medium">
+                Headers
+              </p>
+              <p className="text-sm leading-6">
+                {plugin.headerKeys.length > 0
+                  ? plugin.headerKeys.join(", ")
+                  : "(none)"}
+              </p>
+            </div>
           </CardContent>
         </Card>
       ))}

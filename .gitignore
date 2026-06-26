@@ -7,6 +7,8 @@ __pycache__/
 # Environment
 .env
 .env.local
+.mcp.json
+backend/.mcp.json
 
 # IDE
 .idea/

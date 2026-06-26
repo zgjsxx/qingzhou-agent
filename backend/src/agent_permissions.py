@@ -179,6 +179,9 @@ def _check_shell_deny_list(command: str) -> PermissionDecision:
 
 
 def _check_permission_rules(tool_name: str, args: dict[str, Any]) -> PermissionDecision:
+    if tool_name.startswith("mcp__"):
+        return PermissionDecision("ask", "MCP tools require approval before execution.")
+
     if tool_name in WRITE_TOOLS and _path_escapes_root(
         str(args.get("path", "")),
         str(args.get("cwd", "")),

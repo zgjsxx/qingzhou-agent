@@ -162,6 +162,11 @@ PROMPT_SECTIONS = {
         "and avoid silent all-at-once loops. For PDF/table extraction or large scans, process incrementally "
         "and print progress before and after each page or batch."
     ),
+    "mcp": (
+        "MCP tools come from external servers and are named mcp__{server}__{tool}. "
+        "Use them when their names/descriptions match the user's request. MCP tools are external actions, "
+        "so calls require user approval before execution."
+    ),
     "ssh": (
         "Use run_ssh_command when the user asks to inspect or operate on a configured remote server over SSH. "
         "Prefer the saved SSH configuration when host/user/key are not provided explicitly. "
@@ -230,6 +235,8 @@ def assemble_system_prompt(context: dict[str, Any]) -> str:
         sections.append(PROMPT_SECTIONS["persistent_tasks"])
     if {"list_background_tasks", "get_background_task", "cancel_background_task", "run_shell_command"} <= tool_names:
         sections.append(PROMPT_SECTIONS["background_tasks"])
+    if any(name.startswith("mcp__") for name in tool_names):
+        sections.append(PROMPT_SECTIONS["mcp"])
     if "run_ssh_command" in tool_names:
         sections.append(PROMPT_SECTIONS["ssh"])
 

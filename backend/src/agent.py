@@ -14,6 +14,7 @@ from agent_context import AgentContextCompactMiddleware, XuAgentState
 from agent_cron import start_cron_scheduler
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent_memory import AgentMemoryMiddleware
+from agent_mcp import load_mcp_tools
 from agent_permissions import AgentPermissionMiddleware
 from agent_prompt import build_prompt_context, get_system_prompt
 from skills import skill_catalog_for_prompt
@@ -44,9 +45,11 @@ def configure_llm_provider_env() -> None:
 
 configure_llm_provider_env()
 
+MCP_TOOLS = load_mcp_tools()
+AGENT_TOOLS = [*ALL_TOOLS, *MCP_TOOLS]
 SKILL_CATALOG = skill_catalog_for_prompt()
 PROMPT_CONTEXT = build_prompt_context(
-    tools=ALL_TOOLS,
+    tools=AGENT_TOOLS,
     skill_catalog=SKILL_CATALOG,
     workspace=Path.cwd(),
     frontend_url=FRONTEND_URL,
@@ -64,7 +67,7 @@ if is_agent_logging_enabled():
 
 graph = create_agent(
     model=f"{LLM_ADAPTER_TYPE}:{LLM_MODEL}",
-    tools=ALL_TOOLS,
+    tools=AGENT_TOOLS,
     middleware=middleware,
     state_schema=XuAgentState,
     system_prompt=get_system_prompt(PROMPT_CONTEXT),

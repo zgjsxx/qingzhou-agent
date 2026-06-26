@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+.mcp.json
 .agent_config.json
 logs/
 .tasks/
