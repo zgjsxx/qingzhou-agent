@@ -9,3 +9,4 @@ logs/
 .agent_outputs/
 .agent_uploads/
 .agent_cron/
+ssh_keys
