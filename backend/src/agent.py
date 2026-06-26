@@ -13,6 +13,7 @@ from agent_config import config_str
 from agent_context import AgentContextCompactMiddleware, XuAgentState
 from agent_cron import start_cron_scheduler
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
+from agent_lark import start_lark_ws_bridge
 from agent_memory import AgentMemoryMiddleware
 from agent_mcp import load_mcp_tools
 from agent_permissions import AgentPermissionMiddleware
@@ -74,3 +75,4 @@ graph = create_agent(
 )
 
 start_cron_scheduler()
+start_lark_ws_bridge(graph)

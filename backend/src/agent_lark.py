@@ -1,0 +1,435 @@
+"""Feishu/Lark long-connection bridge for the local agent."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import threading
+import time
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Any
+
+from agent_logging import log_event
+
+LARK_API_BASE_URL = "https://open.feishu.cn/open-apis"
+DEFAULT_HISTORY_MAX_MESSAGES = 20
+DEFAULT_REPLY_MAX_CHARS = 12000
+
+_start_lock = threading.Lock()
+_started = False
+_chat_histories: dict[str, list[Any]] = {}
+_chat_history_lock = threading.Lock()
+_seen_message_ids: dict[str, float] = {}
+_seen_lock = threading.Lock()
+_token_lock = threading.Lock()
+_tenant_access_token_value = ""
+_tenant_access_token_expires_at = 0.0
+
+
+@dataclass(frozen=True)
+class LarkMessageEvent:
+    message_id: str
+    chat_id: str
+    message_type: str
+    text: str
+    sender_id: str = ""
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _get_value(source: Any, *path: str) -> Any:
+    value = source
+    for key in path:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            value = value.get(key)
+        else:
+            value = getattr(value, key, None)
+    return value
+
+
+def _parse_json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _extract_text_content(message_type: str, content: Any) -> str:
+    data = _parse_json_object(content)
+    if message_type == "text":
+        return str(data.get("text") or "").strip()
+    if message_type == "post":
+        fragments: list[str] = []
+        for blocks in data.get("content", []):
+            if not isinstance(blocks, list):
+                continue
+            for item in blocks:
+                if isinstance(item, dict) and item.get("tag") == "text":
+                    fragments.append(str(item.get("text") or ""))
+        return "".join(fragments).strip()
+    return ""
+
+
+def parse_lark_message_event(data: Any) -> LarkMessageEvent | None:
+    """Extract the fields we need from the SDK event object."""
+    event = _get_value(data, "event") or data
+    message = _get_value(event, "message")
+    if message is None:
+        return None
+
+    message_id = str(_get_value(message, "message_id") or "").strip()
+    chat_id = str(_get_value(message, "chat_id") or "").strip()
+    message_type = str(_get_value(message, "message_type") or "").strip()
+    content = _get_value(message, "content")
+    text = _extract_text_content(message_type, content)
+    sender_id = (
+        str(_get_value(event, "sender", "sender_id", "open_id") or "").strip()
+        or str(_get_value(event, "sender", "sender_id", "user_id") or "").strip()
+    )
+
+    if not message_id or not chat_id:
+        return None
+    return LarkMessageEvent(
+        message_id=message_id,
+        chat_id=chat_id,
+        message_type=message_type,
+        text=text,
+        sender_id=sender_id,
+    )
+
+
+def _safe_event_repr(data: Any, limit: int = 1000) -> str:
+    try:
+        raw = repr(data)
+    except Exception as exc:
+        raw = f"<repr failed: {exc!r}>"
+    return raw if len(raw) <= limit else f"{raw[:limit]}...[truncated {len(raw) - limit} chars]"
+
+
+def _thread_id_for_chat(chat_id: str) -> str:
+    safe_id = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", chat_id).strip("_")
+    return f"lark_{safe_id or 'unknown'}"
+
+
+def _remember_seen_message(message_id: str) -> bool:
+    now = time.time()
+    ttl_seconds = _int_env("LARK_DEDUP_TTL_SECONDS", 3600)
+    with _seen_lock:
+        stale_ids = [key for key, seen_at in _seen_message_ids.items() if now - seen_at > ttl_seconds]
+        for key in stale_ids:
+            _seen_message_ids.pop(key, None)
+        if message_id in _seen_message_ids:
+            return False
+        _seen_message_ids[message_id] = now
+        return True
+
+
+def _history_for_thread(thread_id: str) -> list[Any]:
+    with _chat_history_lock:
+        return list(_chat_histories.get(thread_id, []))
+
+
+def _store_thread_history(thread_id: str, messages: list[Any]) -> None:
+    max_messages = max(2, _int_env("LARK_HISTORY_MAX_MESSAGES", DEFAULT_HISTORY_MAX_MESSAGES))
+    with _chat_history_lock:
+        _chat_histories[thread_id] = list(messages[-max_messages:])
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "".join(parts)
+    return str(content or "")
+
+
+def extract_final_ai_text(result: Any) -> str:
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    for message in reversed(messages):
+        message_type = getattr(message, "type", "")
+        role = getattr(message, "role", "")
+        if message_type == "ai" or role == "assistant" or message.__class__.__name__ == "AIMessage":
+            text = _content_to_text(getattr(message, "content", ""))
+            if text.strip():
+                return text.strip()
+    return ""
+
+
+def _tenant_token_request(app_id: str, app_secret: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{LARK_API_BASE_URL}/auth/v3/tenant_access_token/internal",
+        data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _get_tenant_access_token(app_id: str, app_secret: str) -> str:
+    global _tenant_access_token_value
+    global _tenant_access_token_expires_at
+
+    now = time.time()
+    with _token_lock:
+        if _tenant_access_token_value and now < _tenant_access_token_expires_at - 120:
+            return _tenant_access_token_value
+        data = _tenant_token_request(app_id, app_secret)
+        token = str(data.get("tenant_access_token") or "")
+        if not token:
+            raise RuntimeError(f"Failed to get Lark tenant_access_token: {data}")
+        _tenant_access_token_value = token
+        _tenant_access_token_expires_at = now + int(data.get("expire") or 7200)
+        return _tenant_access_token_value
+
+
+def _post_lark_json(path: str, token: str, payload: dict[str, Any], query: dict[str, str] | None = None) -> dict[str, Any]:
+    query_string = f"?{urllib.parse.urlencode(query)}" if query else ""
+    request = urllib.request.Request(
+        f"{LARK_API_BASE_URL}{path}{query_string}",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Lark API HTTP {exc.code}: {detail}") from exc
+
+
+def _reply_chunks(text: str) -> list[str]:
+    limit = max(1000, _int_env("LARK_REPLY_MAX_CHARS", DEFAULT_REPLY_MAX_CHARS))
+    if len(text) <= limit:
+        return [text]
+    return [text[index : index + limit] for index in range(0, len(text), limit)]
+
+
+def send_lark_text(chat_id: str, text: str, *, app_id: str, app_secret: str) -> None:
+    token = _get_tenant_access_token(app_id, app_secret)
+    for chunk in _reply_chunks(text):
+        payload = {
+            "receive_id": chat_id,
+            "msg_type": "text",
+            "content": json.dumps({"text": chunk}, ensure_ascii=False),
+        }
+        response = _post_lark_json(
+            "/im/v1/messages",
+            token,
+            payload,
+            query={"receive_id_type": "chat_id"},
+        )
+        if int(response.get("code") or 0) != 0:
+            raise RuntimeError(f"Lark send message failed: {response}")
+
+
+class LarkWsBridge:
+    def __init__(self, graph: Any, app_id: str, app_secret: str):
+        self.graph = graph
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lark-agent")
+
+    def handle_event(self, data: Any) -> None:
+        log_event("lark.event_received", raw=_safe_event_repr(data))
+        print("[xu-agent lark] event received", file=sys.stderr, flush=True)
+        event = parse_lark_message_event(data)
+        if event is None:
+            log_event("lark.event_ignored", reason="missing_message", raw=_safe_event_repr(data))
+            return
+        log_event(
+            "lark.message_received",
+            chat_id=event.chat_id,
+            message_id=event.message_id,
+            message_type=event.message_type,
+            text_preview=event.text[:200],
+        )
+        if not _remember_seen_message(event.message_id):
+            log_event("lark.event_ignored", reason="duplicate", message_id=event.message_id)
+            return
+        self.executor.submit(self._process_event, event)
+
+    def _process_event(self, event: LarkMessageEvent) -> None:
+        if not event.text:
+            log_event(
+                "lark.message_unsupported",
+                chat_id=event.chat_id,
+                message_id=event.message_id,
+                message_type=event.message_type,
+            )
+            send_lark_text(
+                event.chat_id,
+                "我目前只支持处理飞书文本消息。",
+                app_id=self.app_id,
+                app_secret=self.app_secret,
+            )
+            return
+
+        thread_id = _thread_id_for_chat(event.chat_id)
+        user_content = (
+            "[Feishu message]\n"
+            f"chat_id: {event.chat_id}\n"
+            f"sender_id: {event.sender_id}\n"
+            f"message_id: {event.message_id}\n\n"
+            f"{event.text}"
+        )
+        log_event("lark.run_start", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
+        try:
+            previous_messages = _history_for_thread(thread_id)
+            result = self.graph.invoke(
+                {"messages": [*previous_messages, {"role": "user", "content": user_content}]},
+                config={
+                    "configurable": {"thread_id": thread_id},
+                    "metadata": {"source": "lark", "lark_chat_id": event.chat_id},
+                    "tags": ["lark"],
+                    "callbacks": [],
+                },
+            )
+            messages = result.get("messages", []) if isinstance(result, dict) else []
+            if messages:
+                _store_thread_history(thread_id, list(messages))
+            answer = extract_final_ai_text(result) or "我处理完了，但没有生成可发送的文本回复。"
+            send_lark_text(event.chat_id, answer, app_id=self.app_id, app_secret=self.app_secret)
+            log_event("lark.run_end", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
+        except Exception as exc:
+            log_event(
+                "lark.run_error",
+                chat_id=event.chat_id,
+                message_id=event.message_id,
+                thread_id=thread_id,
+                error=repr(exc),
+                traceback=traceback.format_exc(),
+            )
+            try:
+                send_lark_text(
+                    event.chat_id,
+                    f"处理飞书消息时出错：{exc}",
+                    app_id=self.app_id,
+                    app_secret=self.app_secret,
+                )
+            except Exception as send_exc:
+                log_event(
+                    "lark.reply_error",
+                    chat_id=event.chat_id,
+                    error=repr(send_exc),
+                    traceback=traceback.format_exc(),
+                )
+
+    def run_forever(self) -> None:
+        try:
+            import lark_oapi as lark
+        except ImportError as exc:
+            raise RuntimeError("Feishu/Lark WS mode requires: pip install lark-oapi") from exc
+
+        log_event("lark.ws_handler_register")
+        event_handler = (
+            lark.EventDispatcherHandler.builder("", "")
+            .register_p2_im_message_receive_v1(lambda data: self.handle_event(data))
+            .build()
+        )
+        log_level = lark.LogLevel.DEBUG if _bool_env("LARK_DEBUG", False) else lark.LogLevel.INFO
+        client = lark.ws.Client(
+            self.app_id,
+            self.app_secret,
+            event_handler=event_handler,
+            log_level=log_level,
+        )
+        client.on_reconnecting = lambda: log_event("lark.ws_reconnecting")
+        client.on_reconnected = lambda: log_event("lark.ws_reconnected")
+        log_event("lark.ws_start")
+        print("[xu-agent lark] WS bridge starting", file=sys.stderr, flush=True)
+        client.start()
+
+
+def start_lark_ws_bridge(graph: Any) -> None:
+    """Start the optional Feishu/Lark long-connection bridge in a daemon thread."""
+    global _started
+
+    if not _bool_env("LARK_WS_ENABLED", False):
+        return
+    app_id = os.getenv("LARK_APP_ID", "").strip()
+    app_secret = os.getenv("LARK_APP_SECRET", "").strip()
+    if not app_id or not app_secret:
+        log_event("lark.ws_disabled", reason="missing_app_id_or_secret")
+        return
+
+    with _start_lock:
+        if _started:
+            return
+        _started = True
+
+    bridge = LarkWsBridge(graph=graph, app_id=app_id, app_secret=app_secret)
+
+    def run_bridge() -> None:
+        try:
+            _run_with_blockbuster_skip(bridge.run_forever)
+        except Exception as exc:
+            log_event("lark.ws_error", error=repr(exc))
+            print(f"[xu-agent lark] WS bridge stopped: {exc}", file=sys.stderr, flush=True)
+
+    thread = threading.Thread(
+        target=run_bridge,
+        name="lark-ws-bridge",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _run_with_blockbuster_skip(func: Any) -> None:
+    """Run a dedicated integration thread outside LangGraph's blocking detector.
+
+    LangGraph dev enables blockbuster globally. The Feishu SDK runs its own
+    websocket event loop in this daemon thread and performs network connects
+    inside that loop, which blockbuster otherwise treats as blocking ASGI work.
+    Setting the skip ContextVar here is intentionally scoped to the Lark bridge
+    thread, so normal agent/model/tool execution remains protected.
+    """
+    try:
+        from blockbuster.blockbuster import blockbuster_skip
+    except ImportError:
+        func()
+        return
+
+    token = blockbuster_skip.set(True)
+    try:
+        func()
+    finally:
+        blockbuster_skip.reset(token)
