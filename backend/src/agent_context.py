@@ -36,6 +36,7 @@ from langgraph.types import Command
 from agent_config import config_str
 from agent_logging import log_event
 from agent_prompt import BASE_COMPACT_PROMPT, NO_TOOLS_PREAMBLE, NO_TOOLS_TRAILER
+from llm_config import configure_provider_env, provider_model_kwargs
 
 MANUAL_COMPACT_MARKER = "[compact requested]"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
@@ -455,23 +456,26 @@ def _summary_model_spec() -> str:
 def _configure_summary_provider_env() -> None:
     adapter = os.getenv("LLM_ADAPTER_TYPE", config_str("llm", "adapterType", "anthropic")).strip().lower()
     api_key = os.getenv("LLM_API_KEY", config_str("llm", "apiKey", "")).strip()
+    auth_token = os.getenv("LLM_AUTH_TOKEN", os.getenv("ANTHROPIC_AUTH_TOKEN", "")).strip()
     base_url = os.getenv("LLM_BASE_URL", config_str("llm", "baseUrl", "")).strip()
 
-    if adapter == "anthropic":
-        if api_key:
-            os.environ["ANTHROPIC_API_KEY"] = api_key
-        if base_url:
-            os.environ["ANTHROPIC_API_URL"] = base_url
-    elif adapter == "openai":
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
-        if base_url:
-            os.environ["OPENAI_BASE_URL"] = base_url
+    configure_provider_env(
+        adapter=adapter,
+        api_key=api_key,
+        auth_token=auth_token,
+        base_url=base_url,
+    )
 
 
 def _clean_summary_model() -> Any:
     _configure_summary_provider_env()
-    return init_chat_model(_summary_model_spec(), disable_streaming=True)
+    adapter = os.getenv("LLM_ADAPTER_TYPE", config_str("llm", "adapterType", "anthropic")).strip()
+    auth_token = os.getenv("LLM_AUTH_TOKEN", os.getenv("ANTHROPIC_AUTH_TOKEN", "")).strip()
+    return init_chat_model(
+        _summary_model_spec(),
+        disable_streaming=True,
+        **provider_model_kwargs(adapter=adapter, auth_token=auth_token),
+    )
 
 
 def _summarize_messages(messages_to_summarize: list[BaseMessage]) -> str:
