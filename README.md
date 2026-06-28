@@ -94,6 +94,10 @@ pnpm dev
 
 LLM 和 SSH 配置也可通过前端配置面板管理。
 
+## 斜杠命令
+
+- `/clear`：复用当前 thread，清除消息、token 使用量和上下文压缩状态；支持自有 UI 与飞书，不会交给模型执行。
+
 ## 扩展
 
 - **新增工具**：在 `backend/src/tools.py` 中定义，在 `agent.py` 中导入

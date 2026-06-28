@@ -11,6 +11,13 @@ import agent_lark
 
 
 class AgentLarkTest(unittest.TestCase):
+    def test_worker_pool_uses_daemon_threads(self):
+        pool = agent_lark.DaemonWorkerPool(max_workers=2, thread_name_prefix="test-lark")
+        try:
+            self.assertTrue(all(thread.daemon for thread in pool._threads))
+        finally:
+            pool.shutdown(wait=True)
+
     def test_parse_text_message_event(self):
         data = SimpleNamespace(
             event=SimpleNamespace(
@@ -113,6 +120,35 @@ class AgentLarkTest(unittest.TestCase):
 
         send_text.assert_called_once()
         self.assertEqual(send_text.call_args.args[:2], ("oc_bridge", "收到"))
+
+    def test_bridge_clear_command_reuses_thread_and_clears_history(self):
+        calls = []
+        graph = SimpleNamespace(
+            update_state=lambda config, values: calls.append((config, values)),
+            invoke=lambda *_args, **_kwargs: self.fail("/clear must not invoke the model"),
+        )
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        thread_id = agent_lark._thread_id_for_chat("oc_clear")
+        agent_lark._store_thread_history(thread_id, [SimpleNamespace(type="human", content="old")])
+        event = SimpleNamespace(
+            event=SimpleNamespace(
+                sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_1")),
+                message=SimpleNamespace(
+                    message_id="om_clear",
+                    chat_id="oc_clear",
+                    message_type="text",
+                    content=json.dumps({"text": "/clear"}),
+                ),
+            )
+        )
+
+        with patch("agent_lark.send_lark_text") as send_text:
+            bridge.handle_event(event)
+            bridge.executor.shutdown(wait=True)
+
+        self.assertEqual(calls[0][0], {"configurable": {"thread_id": thread_id}})
+        self.assertEqual(agent_lark._history_for_thread(thread_id), [])
+        self.assertEqual(send_text.call_args.args[:2], ("oc_clear", agent_lark.CLEAR_RESPONSE))
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import sys
 import threading
@@ -12,10 +13,10 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from agent_commands import CLEAR_RESPONSE, clear_thread_context, is_clear_command
 from agent_logging import log_event
 
 LARK_API_BASE_URL = "https://open.feishu.cn/open-apis"
@@ -26,6 +27,8 @@ _start_lock = threading.Lock()
 _started = False
 _chat_histories: dict[str, list[Any]] = {}
 _chat_history_lock = threading.Lock()
+_chat_run_locks: dict[str, threading.Lock] = {}
+_chat_run_locks_guard = threading.Lock()
 _seen_message_ids: dict[str, float] = {}
 _seen_lock = threading.Lock()
 _token_lock = threading.Lock()
@@ -40,6 +43,46 @@ class LarkMessageEvent:
     message_type: str
     text: str
     sender_id: str = ""
+
+
+class DaemonWorkerPool:
+    """Small daemon-thread worker pool that cannot block interpreter exit."""
+
+    def __init__(self, max_workers: int, thread_name_prefix: str):
+        self._queue: queue.Queue[tuple[Any, tuple[Any, ...]] | None] = queue.Queue()
+        self._threads = [
+            threading.Thread(
+                target=self._worker,
+                name=f"{thread_name_prefix}_{index}",
+                daemon=True,
+            )
+            for index in range(max_workers)
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def _worker(self) -> None:
+        while True:
+            task = self._queue.get()
+            try:
+                if task is None:
+                    return
+                func, args = task
+                func(*args)
+            except Exception as exc:
+                log_event("lark.worker_error", error=repr(exc), traceback=traceback.format_exc())
+            finally:
+                self._queue.task_done()
+
+    def submit(self, func: Any, *args: Any) -> None:
+        self._queue.put((func, args))
+
+    def shutdown(self, wait: bool = True) -> None:
+        for _ in self._threads:
+            self._queue.put(None)
+        if wait:
+            for thread in self._threads:
+                thread.join()
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -162,6 +205,16 @@ def _store_thread_history(thread_id: str, messages: list[Any]) -> None:
         _chat_histories[thread_id] = list(messages[-max_messages:])
 
 
+def _clear_thread_history(thread_id: str) -> None:
+    with _chat_history_lock:
+        _chat_histories.pop(thread_id, None)
+
+
+def _run_lock_for_chat(chat_id: str) -> threading.Lock:
+    with _chat_run_locks_guard:
+        return _chat_run_locks.setdefault(chat_id, threading.Lock())
+
+
 def _content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -266,7 +319,7 @@ class LarkWsBridge:
         self.graph = graph
         self.app_id = app_id
         self.app_secret = app_secret
-        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lark-agent")
+        self.executor = DaemonWorkerPool(max_workers=2, thread_name_prefix="lark-agent")
 
     def handle_event(self, data: Any) -> None:
         log_event("lark.event_received", raw=_safe_event_repr(data))
@@ -288,6 +341,10 @@ class LarkWsBridge:
         self.executor.submit(self._process_event, event)
 
     def _process_event(self, event: LarkMessageEvent) -> None:
+        with _run_lock_for_chat(event.chat_id):
+            self._process_event_locked(event)
+
+    def _process_event_locked(self, event: LarkMessageEvent) -> None:
         if not event.text:
             log_event(
                 "lark.message_unsupported",
@@ -304,6 +361,27 @@ class LarkWsBridge:
             return
 
         thread_id = _thread_id_for_chat(event.chat_id)
+        if is_clear_command(event.text):
+            try:
+                clear_thread_context(self.graph, thread_id, source="lark")
+                _clear_thread_history(thread_id)
+                send_lark_text(event.chat_id, CLEAR_RESPONSE, app_id=self.app_id, app_secret=self.app_secret)
+            except Exception as exc:
+                log_event(
+                    "lark.command_error",
+                    command="/clear",
+                    chat_id=event.chat_id,
+                    thread_id=thread_id,
+                    error=repr(exc),
+                )
+                send_lark_text(
+                    event.chat_id,
+                    f"清除会话上下文失败：{exc}",
+                    app_id=self.app_id,
+                    app_secret=self.app_secret,
+                )
+            return
+
         user_content = (
             "[Feishu message]\n"
             f"chat_id: {event.chat_id}\n"

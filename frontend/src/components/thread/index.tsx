@@ -202,10 +202,15 @@ export function Thread() {
     prevMessageLength.current = messages.length;
   }, [messages]);
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if ((input.trim().length === 0 && contentBlocks.length === 0) || isLoading)
       return;
+    if (input.trim().toLowerCase() === "/clear" && contentBlocks.length === 0) {
+      setInput("");
+      await stream.clearContext();
+      return;
+    }
     setFirstTokenReceived(false);
 
     const newHumanMessage: Message = {
@@ -213,7 +218,9 @@ export function Thread() {
       type: "human",
       content: [
         ...(input.trim().length > 0 ? [{ type: "text", text: input }] : []),
-        ...contentBlocks.map((block) => uploadedFileBlockToText(block) ?? block),
+        ...contentBlocks.map(
+          (block) => uploadedFileBlockToText(block) ?? block,
+        ),
       ] as Message["content"],
     };
 
@@ -427,13 +434,29 @@ export function Thread() {
                           message={message}
                           isLoading={isLoading}
                           handleRegenerate={handleRegenerate}
-                          isLastMessage={messages[messages.length - 1].id === message.id}
+                          isLastMessage={
+                            messages[messages.length - 1].id === message.id
+                          }
                           hasNoAIOrToolMessages={hasNoAIOrToolMessages}
                           threadInterrupt={threadInterrupt}
                           hideToolCalls={hideToolCalls ?? false}
-                          parentCheckpoint={message ? stream.getMessagesMetadata(message)?.firstSeenState?.parent_checkpoint : undefined}
-                          branch={message ? stream.getMessagesMetadata(message)?.branch : undefined}
-                          branchOptions={message ? stream.getMessagesMetadata(message)?.branchOptions : undefined}
+                          parentCheckpoint={
+                            message
+                              ? stream.getMessagesMetadata(message)
+                                  ?.firstSeenState?.parent_checkpoint
+                              : undefined
+                          }
+                          branch={
+                            message
+                              ? stream.getMessagesMetadata(message)?.branch
+                              : undefined
+                          }
+                          branchOptions={
+                            message
+                              ? stream.getMessagesMetadata(message)
+                                  ?.branchOptions
+                              : undefined
+                          }
                           onSetBranch={handleSetBranch}
                         />
                       ),
@@ -547,7 +570,7 @@ export function Thread() {
                         />
                         <div className="ml-auto flex items-center gap-3">
                           <div
-                            className="text-muted-foreground bg-background/70 whitespace-nowrap rounded-md border px-2.5 py-1 text-xs"
+                            className="text-muted-foreground bg-background/70 rounded-md border px-2.5 py-1 text-xs whitespace-nowrap"
                             title={
                               contextUsage?.input_tokens != null
                                 ? `${contextUsage.input_tokens.toLocaleString()} input tokens${contextUsage.output_tokens != null ? `, ${contextUsage.output_tokens.toLocaleString()} output tokens` : ""}${contextUsage.total_tokens != null ? `, ${contextUsage.total_tokens.toLocaleString()} total tokens` : ""}, ${contextUsage.message_count.toLocaleString()} messages${contextUsage.includes_tools ? ", tools included" : ""}. Source: ${contextUsage.counter ?? "model tokenizer"}`

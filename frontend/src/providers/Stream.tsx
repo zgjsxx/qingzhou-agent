@@ -4,6 +4,7 @@ import React, {
   ReactNode,
   useState,
   useEffect,
+  useCallback,
 } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { type Message } from "@langchain/langgraph-sdk";
@@ -40,6 +41,9 @@ export type StateType = {
   messages: Message[];
   ui?: UIMessage[];
   context_usage?: ContextUsage;
+  compact_metadata?: Record<string, unknown>;
+  snip_compact_metadata?: Record<string, unknown>;
+  compact_failure_count?: number;
 };
 
 const useTypedStream = useStream<
@@ -54,7 +58,9 @@ const useTypedStream = useStream<
   }
 >;
 
-type StreamContextType = ReturnType<typeof useTypedStream>;
+type StreamContextType = ReturnType<typeof useTypedStream> & {
+  clearContext: () => Promise<void>;
+};
 const StreamContext = createContext<StreamContextType | undefined>(undefined);
 
 async function sleep(ms = 4000) {
@@ -125,6 +131,37 @@ const StreamSession = ({
     },
   });
 
+  const clearContext = useCallback(async () => {
+    if (!threadId) {
+      toast.success("当前会话上下文已清除");
+      return;
+    }
+    if (streamValue.isLoading) {
+      toast.error("当前会话仍在运行，请稍后再清除");
+      return;
+    }
+
+    try {
+      await streamValue.client.threads.updateState<Record<string, unknown>>(
+        threadId,
+        {
+          values: {
+            messages: [{ type: "remove", id: "__remove_all__", content: "" }],
+            context_usage: {},
+            compact_metadata: {},
+            snip_compact_metadata: {},
+            compact_failure_count: 0,
+          },
+        },
+      );
+      toast.success("当前会话上下文已清除");
+      window.location.reload();
+    } catch (error) {
+      console.error("Failed to clear thread context", error);
+      toast.error("清除会话上下文失败");
+    }
+  }, [streamValue.client, streamValue.isLoading, threadId]);
+
   useEffect(() => {
     checkGraphStatus(apiUrl, apiKey, authScheme).then((ok) => {
       if (!ok) {
@@ -143,8 +180,10 @@ const StreamSession = ({
     });
   }, [apiKey, apiUrl, authScheme]);
 
+  const contextValue = Object.assign(streamValue, { clearContext });
+
   return (
-    <StreamContext.Provider value={streamValue}>
+    <StreamContext.Provider value={contextValue}>
       {children}
     </StreamContext.Provider>
   );
