@@ -131,12 +131,22 @@ def _create_embedding_model(modules: dict[str, Any]):
 
     if provider == "openai":
         api_key = _env_first("RAG_EMBEDDING_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY")
+        auth_token = _env_first(
+            "RAG_EMBEDDING_AUTH_TOKEN",
+            "OPENAI_AUTH_TOKEN",
+            "LLM_AUTH_TOKEN",
+        )
         base_url = _env_first("RAG_EMBEDDING_BASE_URL", "OPENAI_BASE_URL", "LLM_BASE_URL")
-        if not api_key:
-            raise RuntimeError("RAG_EMBEDDING_API_KEY or OPENAI_API_KEY is required for RAG embeddings.")
+        credential = auth_token or api_key
+        if not credential:
+            raise RuntimeError(
+                "RAG_EMBEDDING_AUTH_TOKEN, RAG_EMBEDDING_API_KEY, or OPENAI_API_KEY "
+                "is required for RAG embeddings."
+            )
         kwargs: dict[str, Any] = {
             "model": model or "text-embedding-3-small",
-            "api_key": api_key,
+            # OpenAI-compatible clients send this value as a Bearer credential.
+            "api_key": credential,
         }
         if base_url:
             kwargs["base_url"] = base_url
@@ -144,9 +154,16 @@ def _create_embedding_model(modules: dict[str, Any]):
 
     if provider == "dashscope":
         api_key = _env_first("RAG_EMBEDDING_API_KEY", "DASHSCOPE_API_KEY", "PROVIDER_DASHSCOPE_API_KEY")
-        if not api_key:
-            raise RuntimeError("RAG_EMBEDDING_API_KEY or DASHSCOPE_API_KEY is required for DashScope RAG embeddings.")
-        return DashScopeEmbeddingWrapper(model=model or "text-embedding-v4", api_key=api_key)
+        # Do not reuse LLM_AUTH_TOKEN here: an Anthropic gateway token is not
+        # necessarily valid for the native DashScope embedding endpoint.
+        auth_token = _env_first("RAG_EMBEDDING_AUTH_TOKEN", "DASHSCOPE_AUTH_TOKEN")
+        credential = auth_token or api_key
+        if not credential:
+            raise RuntimeError(
+                "RAG_EMBEDDING_AUTH_TOKEN, RAG_EMBEDDING_API_KEY, or DASHSCOPE_API_KEY "
+                "is required for DashScope RAG embeddings."
+            )
+        return DashScopeEmbeddingWrapper(model=model or "text-embedding-v4", api_key=credential)
 
     if provider == "minimax":
         api_key = _env_first("RAG_EMBEDDING_API_KEY", "MINIMAX_API_KEY", "PROVIDER_MINIMAX_API_KEY")
