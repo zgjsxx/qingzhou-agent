@@ -187,7 +187,7 @@ class McpHttpClient:
             {
                 "protocolVersion": self.config.protocol_version,
                 "capabilities": {},
-                "clientInfo": {"name": "xu-agent", "version": "1.1.0"},
+                "clientInfo": {"name": "xu-agent", "version": "1.2.0"},
             },
         )
         if isinstance(result, dict) and result.get("protocolVersion"):
