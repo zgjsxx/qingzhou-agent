@@ -19,7 +19,13 @@ const supportedTypes = new Set([
 
 function safeFilename(name: string) {
   const base = path.basename(name || "upload");
-  const cleaned = base.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").trim();
+  const invalidFilenameChars = '<>:"/\\|?*';
+  const cleaned = Array.from(base, (char) => {
+    const code = char.charCodeAt(0);
+    return code <= 0x1f || invalidFilenameChars.includes(char) ? "_" : char;
+  })
+    .join("")
+    .trim();
   return cleaned || "upload";
 }
 
