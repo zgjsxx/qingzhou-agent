@@ -82,10 +82,22 @@ async function checkGraphStatus(
     });
 
     return res.ok;
-  } catch (e) {
-    console.error(e);
+  } catch {
     return false;
   }
+}
+
+async function waitForGraphStatus(
+  apiUrl: string,
+  apiKey: string | null,
+  authScheme?: string,
+  attempts = 10,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await checkGraphStatus(apiUrl, apiKey, authScheme)) return true;
+    if (attempt < attempts - 1) await sleep(1000);
+  }
+  return false;
 }
 
 const StreamSession = ({
@@ -163,8 +175,9 @@ const StreamSession = ({
   }, [streamValue.client, streamValue.isLoading, threadId]);
 
   useEffect(() => {
-    checkGraphStatus(apiUrl, apiKey, authScheme).then((ok) => {
-      if (!ok) {
+    let cancelled = false;
+    waitForGraphStatus(apiUrl, apiKey, authScheme).then((ok) => {
+      if (!ok && !cancelled) {
         toast.error("Failed to connect to LangGraph server", {
           description: () => (
             <p>
@@ -178,6 +191,9 @@ const StreamSession = ({
         });
       }
     });
+    return () => {
+      cancelled = true;
+    };
   }, [apiKey, apiUrl, authScheme]);
 
   const contextValue = Object.assign(streamValue, { clearContext });

@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [int]$BackendTimeoutSeconds = 90,
+    [int]$FrontendTimeoutSeconds = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +50,30 @@ function Test-TrackedProcess {
     return $false
 }
 
+function Wait-HttpReady {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+        [Parameter(Mandatory = $true)][string]$ServiceName
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max($TimeoutSeconds, 1))
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 2
+            if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+                return
+            }
+        }
+        catch {
+            # The service may still be importing modules or binding its port.
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "$ServiceName did not become ready within $TimeoutSeconds seconds: $Url"
+}
+
 if (Test-TrackedProcess) {
     throw "xu-agent is already running. Use .\stop.ps1 before starting it again."
 }
@@ -91,6 +117,19 @@ $backendProcess = Start-Process `
     -RedirectStandardError (Join-Path $logDir "backend.err.log") `
     -PassThru
 
+Write-Host "Waiting for backend readiness..."
+try {
+    Wait-HttpReady `
+        -Url "http://127.0.0.1:2024/info" `
+        -TimeoutSeconds $BackendTimeoutSeconds `
+        -ServiceName "Backend"
+}
+catch {
+    & (Join-Path $root "stop.ps1")
+    throw
+}
+Write-Host "Backend is ready."
+
 $env:LANGGRAPH_API_URL = "http://127.0.0.1:2024"
 $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:3000/api"
 $env:NEXT_PUBLIC_ASSISTANT_ID = "agent"
@@ -113,11 +152,18 @@ $processInfo = [ordered]@{
 }
 $processInfo | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
 
-Start-Sleep -Seconds 3
-if ($backendProcess.HasExited -or $frontendProcess.HasExited) {
-    & (Join-Path $root "stop.ps1")
-    throw "A service exited during startup. Check logs in $logDir"
+Write-Host "Waiting for frontend readiness..."
+try {
+    Wait-HttpReady `
+        -Url "http://127.0.0.1:3000" `
+        -TimeoutSeconds $FrontendTimeoutSeconds `
+        -ServiceName "Frontend"
 }
+catch {
+    & (Join-Path $root "stop.ps1")
+    throw
+}
+Write-Host "Frontend is ready."
 
 Write-Host ""
 Write-Host "xu-agent is running at http://127.0.0.1:3000" -ForegroundColor Green
