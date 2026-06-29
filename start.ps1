@@ -16,8 +16,17 @@ $nextBuild = Join-Path $frontendDir ".next"
 
 function Test-Port {
     param([int]$Port)
-    $connection = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
-    return $null -ne $connection
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $task = $client.ConnectAsync("127.0.0.1", $Port)
+        return $task.Wait(500) -and $client.Connected
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $client.Dispose()
+    }
 }
 
 function Test-TrackedProcess {
@@ -59,6 +68,15 @@ if (-not (Test-Path $nextExe)) {
 }
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+# Some launchers inject both "Path" and "PATH". Windows PowerShell 5
+# Start-Process treats them as duplicate dictionary keys and fails. Normalize
+# only this script process; user and system environment variables are untouched.
+$processPath = [Environment]::GetEnvironmentVariable("Path", "Process")
+if ($processPath) {
+    [Environment]::SetEnvironmentVariable("PATH", $null, "Process")
+    [Environment]::SetEnvironmentVariable("Path", $processPath, "Process")
+}
 
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"

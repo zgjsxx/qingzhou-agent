@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plug, Settings, Sparkles, XIcon } from "lucide-react";
+import { Activity, Plug, Settings, Sparkles, XIcon } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
 import {
@@ -154,6 +155,17 @@ export function LocalPanels() {
           <Plug className="size-4" />
           插件
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start gap-2 px-3"
+          asChild
+        >
+          <Link href="/monitor">
+            <Activity className="size-4" />
+            运行监控
+          </Link>
+        </Button>
       </div>
 
       {mode && (
@@ -173,7 +185,7 @@ export function LocalPanels() {
                     ? "Project skills available to the agent."
                     : mode === "plugins"
                       ? "Configured MCP plugins available to the main agent."
-                    : "Local LLM and SSH settings saved outside git."}
+                      : "Local LLM and SSH settings saved outside git."}
                 </p>
               </div>
               <Button
@@ -279,7 +291,7 @@ function PluginsPage({ plugins }: { plugins: Plugin[] }) {
           <CardContent className="grid gap-3">
             <div>
               <p className="text-muted-foreground text-xs font-medium">URL</p>
-              <p className="break-all font-mono text-xs leading-5">
+              <p className="font-mono text-xs leading-5 break-all">
                 {plugin.url || "(not set)"}
               </p>
             </div>

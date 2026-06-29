@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipBackend,
-    [switch]$SkipFrontend
+    [switch]$SkipFrontend,
+    [switch]$AllowRunning
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,7 +31,28 @@ function Invoke-Checked {
     }
 }
 
+function Test-Port {
+    param([int]$Port)
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $task = $client.ConnectAsync("127.0.0.1", $Port)
+        return $task.Wait(500) -and $client.Connected
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $client.Dispose()
+    }
+}
+
 Write-Host "Building xu-agent..." -ForegroundColor Cyan
+
+if (-not $SkipFrontend -and -not $AllowRunning) {
+    if (Test-Port 3000) {
+        throw "Frontend is running on port 3000. Run .\stop.ps1 before building so Next.js CSS assets are not replaced underneath the active server. Use -AllowRunning only if you understand the risk."
+    }
+}
 
 if (-not $SkipBackend) {
     if (-not (Test-Path $pythonExe)) {
