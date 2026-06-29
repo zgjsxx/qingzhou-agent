@@ -14,6 +14,7 @@ import {
 } from "../ui/card";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 
 type PanelMode = "skills" | "plugins" | "config" | null;
@@ -68,6 +69,17 @@ export function LocalPanels() {
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [config, setConfig] = useState<AgentConfig>(emptyConfig);
   const [saving, setSaving] = useState(false);
+  const [pluginSavingName, setPluginSavingName] = useState<string | null>(null);
+
+  const loadPlugins = async () => {
+    try {
+      const res = await fetch("/api/local/plugins");
+      const data = await res.json();
+      setPlugins(Array.isArray(data.plugins) ? data.plugins : []);
+    } catch {
+      setPlugins([]);
+    }
+  };
 
   useEffect(() => {
     fetch("/api/local/skills")
@@ -75,12 +87,7 @@ export function LocalPanels() {
       .then((data) => setSkills(Array.isArray(data.skills) ? data.skills : []))
       .catch(() => setSkills([]));
 
-    fetch("/api/local/plugins")
-      .then((res) => res.json())
-      .then((data) =>
-        setPlugins(Array.isArray(data.plugins) ? data.plugins : []),
-      )
-      .catch(() => setPlugins([]));
+    loadPlugins();
 
     fetch("/api/local/config")
       .then((res) => res.json())
@@ -125,6 +132,39 @@ export function LocalPanels() {
     }
   };
 
+  const togglePlugin = async (name: string, enabled: boolean) => {
+    setPluginSavingName(name);
+    setPlugins((current) =>
+      current.map((plugin) =>
+        plugin.name === name ? { ...plugin, enabled } : plugin,
+      ),
+    );
+
+    try {
+      const res = await fetch("/api/local/plugins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      await loadPlugins();
+      toast.success(enabled ? "Plugin enabled" : "Plugin disabled", {
+        description:
+          "The config is saved. Restart the backend to apply MCP tool changes.",
+      });
+    } catch (error) {
+      await loadPlugins();
+      toast.error("Failed to update plugin", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      setPluginSavingName(null);
+    }
+  };
+
   return (
     <>
       <div className="flex w-full flex-col gap-1">
@@ -153,7 +193,7 @@ export function LocalPanels() {
           onClick={() => setMode("plugins")}
         >
           <Plug className="size-4" />
-          插件
+          鎻掍欢
         </Button>
         <Button
           variant="ghost"
@@ -163,7 +203,7 @@ export function LocalPanels() {
         >
           <Link href="/monitor">
             <Activity className="size-4" />
-            运行监控
+            杩愯鐩戞帶
           </Link>
         </Button>
       </div>
@@ -202,7 +242,11 @@ export function LocalPanels() {
               {mode === "skills" ? (
                 <SkillsPage skills={skills} />
               ) : mode === "plugins" ? (
-                <PluginsPage plugins={plugins} />
+                <PluginsPage
+                  plugins={plugins}
+                  pluginSavingName={pluginSavingName}
+                  onToggle={togglePlugin}
+                />
               ) : (
                 <ConfigPage
                   config={config}
@@ -253,7 +297,13 @@ function SkillsPage({ skills }: { skills: Skill[] }) {
   );
 }
 
-function PluginsPage({ plugins }: { plugins: Plugin[] }) {
+function PluginsPage(props: {
+  plugins: Plugin[];
+  pluginSavingName: string | null;
+  onToggle: (name: string, enabled: boolean) => void;
+}) {
+  const { plugins, pluginSavingName, onToggle } = props;
+
   if (plugins.length === 0) {
     return (
       <Card className="max-w-xl">
@@ -268,46 +318,82 @@ function PluginsPage({ plugins }: { plugins: Plugin[] }) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {plugins.map((plugin) => (
-        <Card
-          key={`${plugin.name}-${plugin.url}`}
-          className="gap-4 rounded-lg"
-        >
-          <CardHeader>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <CardTitle className="text-base">{plugin.name}</CardTitle>
-                <CardDescription>
-                  {plugin.configured ? "Configured" : "Example"} ·{" "}
-                  {plugin.enabled ? "Enabled" : "Disabled"}
-                </CardDescription>
+    <div className="flex flex-col gap-4">
+      <Card className="max-w-3xl rounded-lg">
+        <CardHeader>
+          <CardTitle>Plugin Control</CardTitle>
+          <CardDescription>
+            You can enable or disable configured MCP plugins here. Changes are
+            written to <code>backend/.mcp.json</code> and take effect after the
+            backend restarts.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {plugins.map((plugin) => (
+          <Card
+            key={`${plugin.name}-${plugin.url}`}
+            className="gap-4 rounded-lg"
+          >
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <CardTitle className="text-base">{plugin.name}</CardTitle>
+                  <CardDescription>
+                    {plugin.configured ? "Configured" : "Example"} ·{" "}
+                    {plugin.enabled ? "Enabled" : "Disabled"}
+                  </CardDescription>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  {plugin.configured ? (
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={plugin.enabled}
+                        disabled={pluginSavingName === plugin.name}
+                        onCheckedChange={(checked) =>
+                          onToggle(plugin.name, checked)
+                        }
+                        aria-label={`Toggle ${plugin.name}`}
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        {pluginSavingName === plugin.name ? "Saving..." : ""}
+                      </span>
+                    </div>
+                  ) : null}
+                  <span className="bg-muted rounded-md px-2 py-1 text-xs font-medium uppercase">
+                    {plugin.type}
+                  </span>
+                </div>
               </div>
-              <span className="bg-muted shrink-0 rounded-md px-2 py-1 text-xs font-medium uppercase">
-                {plugin.type}
-              </span>
-            </div>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <div>
-              <p className="text-muted-foreground text-xs font-medium">URL</p>
-              <p className="font-mono text-xs leading-5 break-all">
-                {plugin.url || "(not set)"}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground text-xs font-medium">
-                Headers
-              </p>
-              <p className="text-sm leading-6">
-                {plugin.headerKeys.length > 0
-                  ? plugin.headerKeys.join(", ")
-                  : "(none)"}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <div>
+                <p className="text-muted-foreground text-xs font-medium">URL</p>
+                <p className="font-mono text-xs leading-5 break-all">
+                  {plugin.url || "(not set)"}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs font-medium">
+                  Headers
+                </p>
+                <p className="text-sm leading-6">
+                  {plugin.headerKeys.length > 0
+                    ? plugin.headerKeys.join(", ")
+                    : "(none)"}
+                </p>
+              </div>
+              {!plugin.configured ? (
+                <p className="text-muted-foreground text-xs leading-5">
+                  Example plugins are read-only. Add them to{" "}
+                  <code>backend/.mcp.json</code> before toggling them here.
+                </p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }

@@ -6,4 +6,4 @@ if (-not $env:LANGGRAPH_NO_CLEAN) {
     Remove-Item -Recurse -Force .langgraph_api
 }
 
-langgraph dev
+langgraph dev --no-browser

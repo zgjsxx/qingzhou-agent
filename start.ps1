@@ -110,7 +110,7 @@ $env:PYTHONIOENCODING = "utf-8"
 Write-Host "Starting backend..."
 $backendProcess = Start-Process `
     -FilePath $langgraphExe `
-    -ArgumentList @("dev", "--no-reload", "--host", "127.0.0.1", "--port", "2024") `
+    -ArgumentList @("dev", "--no-reload", "--no-browser", "--host", "127.0.0.1", "--port", "2024") `
     -WorkingDirectory $backendDir `
     -WindowStyle Hidden `
     -RedirectStandardOutput (Join-Path $logDir "backend.out.log") `
