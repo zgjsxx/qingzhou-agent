@@ -137,6 +137,10 @@ PROMPT_SECTIONS = {
         "执行过程中每完成一个阶段或切换当前重点时，应再次调用 todo_write 更新状态。"
         "todo 状态只能使用 pending、in_progress、completed。"
         "简单问答或一次性工具调用不需要使用 todo_write。"
+        "简单问答、一次性说明、直接给出结论的回复，如果不需要持续任务跟踪，就不要调用 todo_write。"
+        "如果确实需要更新 todo，必须先更新 todo，再开始撰写给用户的最终回复。"
+        "一旦开始撰写给用户的最终答案，就不要再调用 todo_write。"
+        "不要在已经给出完整答案之后，再追加 todo_write 只是为了标记完成或补一句总结。"
     ),
     "subagent": (
         "遇到复杂但相对独立的子问题时，可以调用 run_subagent(description) 启动子 Agent；"
