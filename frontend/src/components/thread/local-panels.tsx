@@ -193,7 +193,11 @@ export function LocalPanels() {
           onClick={() => setMode("plugins")}
         >
           <Plug className="size-4" />
-          鎻掍欢
+          {/* 这里故意使用 HTML 数字实体，而不是直接写中文“插件”。
+              这两个菜单项之前曾被某次 Windows/编辑器编码转换保存成 Mojibake
+              （例如“插件”变成“鎻掍欢”），实体写法能让源码保持 ASCII，
+              浏览器渲染时仍显示正确中文，避免再次被错误编码污染。 */}
+          &#25554;&#20214;
         </Button>
         <Button
           variant="ghost"
@@ -203,7 +207,10 @@ export function LocalPanels() {
         >
           <Link href="/monitor">
             <Activity className="size-4" />
-            杩愯鐩戞帶
+            {/* 同上，数字实体对应“运行监控”。保留这段注释是为了提醒后续维护者：
+                看到实体不要改回直接中文，否则在当前 Windows 工具链/终端编码组合下，
+                有机会再次被保存或构建成乱码。 */}
+            &#36816;&#34892;&#30417;&#25511;
           </Link>
         </Button>
       </div>

@@ -319,6 +319,47 @@ def _run_shell_process(
         return None, stdout, stderr, True
 
 
+def _run_ssh_process(argv: list[str], timeout: int) -> tuple[int | None, str, str, bool]:
+    # SSH 远程命令必须按“非交互工具调用”处理，不能复用后端进程的 stdin。
+    #
+    # 如果这里不显式关闭 stdin，OpenSSH 会把本地 stdin 转发给远端命令。后端服务
+    # 不是用户手动打开的终端，它的 stdin 可能一直保持打开但永远不给数据；远端命令
+    # 或登录脚本一旦执行 read/cat/sudo 等读取输入的逻辑，就会一直等待，直到工具层
+    # timeout。用户在终端里直接 ssh 不一定复现，因为终端有真实 TTY，输入/EOF 行为
+    # 和后台子进程不同。
+    #
+    # subprocess.DEVNULL 让远端读取输入时立即得到 EOF，配合 ssh -n / StdinNull=yes
+    # 保证本工具始终是可预测的非交互执行。
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_shell_env(),
+        **_popen_kwargs(),
+    )
+
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return process.returncode, stdout, stderr, False
+    except subprocess.TimeoutExpired as exc:
+        _kill_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            if process.poll() is None:
+                process.kill()
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            return None, stdout, stderr, True
+        stdout = stdout or exc.stdout or ""
+        stderr = stderr or exc.stderr or ""
+        return None, stdout, stderr, True
+
+
 def _run_shell_process_streaming(
     argv: list[str],
     cwd: str,
@@ -1198,10 +1239,20 @@ def run_ssh_command(
         timeout = DEFAULT_TIMEOUT_SECONDS
     timeout = min(max(timeout, 1), MAX_TIMEOUT_SECONDS)
 
+    # 这里同时使用三层“关闭输入”的保护：
+    # 1. ssh -n：OpenSSH 客户端不从 stdin 读取数据，等价于把 stdin 重定向到空设备。
+    # 2. StdinNull=yes：用 ssh 配置项表达同样意图，避免 extraArgs 或平台差异让行为变含糊。
+    # 3. _run_ssh_process(stdin=DEVNULL)：Python 子进程层面也断开 stdin。
+    #
+    # BatchMode=yes 仍然保留，用来禁止密码、passphrase 等交互式提示；如果认证失败，
+    # ssh 会尽快返回错误，而不是在后台工具调用里静默等待。
     argv = [
         ssh,
+        "-n",
         "-o",
         "BatchMode=yes",
+        "-o",
+        "StdinNull=yes",
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-p",
@@ -1213,14 +1264,7 @@ def run_ssh_command(
     argv.extend([_ssh_target(resolved_user, resolved_host), command])
 
     try:
-        completed = _run_process(argv, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return (
-            f"ssh_host: {resolved_host}\n"
-            f"ssh_user: {resolved_user or '(default)'}\n"
-            f"timeout_seconds: {timeout}\n"
-            "status: timed out"
-        )
+        returncode, stdout, stderr, timed_out = _run_ssh_process(argv, timeout=timeout)
     except OSError as exc:
         return f"Error: failed to run ssh: {exc}"
 
@@ -1228,13 +1272,25 @@ def run_ssh_command(
         max_output_chars = int(os.getenv("SHELL_TOOL_MAX_OUTPUT_CHARS", DEFAULT_MAX_OUTPUT_CHARS))
     except ValueError:
         max_output_chars = DEFAULT_MAX_OUTPUT_CHARS
+    if timed_out:
+        output = (
+            f"ssh_host: {resolved_host}\n"
+            f"ssh_user: {resolved_user or '(default)'}\n"
+            f"ssh_port: {resolved_port}\n"
+            f"timeout_seconds: {timeout}\n"
+            "status: timed out; process tree killed\n\n"
+            f"stdout:\n{stdout}\n\n"
+            f"stderr:\n{stderr}"
+        )
+        return _truncate(output, max(max_output_chars, 1000))
+
     output = (
         f"ssh_host: {resolved_host}\n"
         f"ssh_user: {resolved_user or '(default)'}\n"
         f"ssh_port: {resolved_port}\n"
-        f"exit_code: {completed.returncode}\n\n"
-        f"stdout:\n{completed.stdout}\n\n"
-        f"stderr:\n{completed.stderr}"
+        f"exit_code: {returncode}\n\n"
+        f"stdout:\n{stdout}\n\n"
+        f"stderr:\n{stderr}"
     )
     return _truncate(output, max(max_output_chars, 1000))
 
