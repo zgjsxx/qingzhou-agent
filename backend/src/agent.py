@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 
 from agent_config import config_str
+from agent_commands import AgentCommandMiddleware
 from agent_context import AgentContextCompactMiddleware, XuAgentState
 from agent_cron import start_cron_scheduler
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
@@ -65,6 +66,7 @@ PROMPT_CONTEXT = build_prompt_context(
 
 middleware = [
     AgentMemoryMiddleware(),
+    AgentCommandMiddleware(),
     AgentContextCompactMiddleware(),
     AgentPermissionMiddleware(),
 ]

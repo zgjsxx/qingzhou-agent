@@ -34,16 +34,6 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from agent_config import config_str
-from agent_commands import (
-    CLEAR_COMMAND,
-    CLEAR_RESPONSE,
-    COMPACT_COMMAND,
-    HELP_COMMAND,
-    HELP_RESPONSE,
-    SlashCommand,
-    clear_context_update,
-    parse_slash_command_messages,
-)
 from agent_logging import log_event
 from agent_prompt import BASE_COMPACT_PROMPT, NO_TOOLS_PREAMBLE, NO_TOOLS_TRAILER
 from llm_config import configure_provider_env, provider_model_kwargs
@@ -732,97 +722,12 @@ def _compact_failure_update(state: Any, exc: Exception) -> dict[str, Any]:
     return {"compact_failure_count": failure_count}
 
 
-def _state_has_slash_command(state: Any) -> bool:
-    return parse_slash_command_messages(list(_state_value(state, "messages", []) or [])) is not None
-
-
-def _agent_slash_command_request(request: ModelRequest) -> tuple[SlashCommand, list[BaseMessage]] | None:
-    state_messages = list(_state_value(request.state, "messages", []) or [])
-    request_messages = list(request.messages or [])
-    state_command = parse_slash_command_messages(state_messages)
-    request_command = parse_slash_command_messages(request_messages)
-    command = state_command or request_command
-    if not command:
-        return None
-
-    # 优先以 state 中真实落库的最后一条用户消息为准；request.messages 可能被其它 middleware 注入记忆文本，
-    # 适合作为识别兜底，但不适合直接决定要删除哪条 checkpoint 消息。
-    messages_without_command = state_messages[:-1] if state_command and state_messages else state_messages
-    return command, messages_without_command
-
-
-def _remove_manual_command_update(command_id: str | None) -> dict[str, Any]:
-    if not command_id:
-        return {}
-    return {"messages": [RemoveMessage(id=command_id, content="")]}
-
-
-def _manual_compact_model_response(update: dict[str, Any], content: str) -> ExtendedModelResponse:
-    return ExtendedModelResponse(
-        model_response=ModelResponse(result=[AIMessage(content=content)]),
-        command=Command(update=update),
-    )
-
-
-def _manual_compact_success_message(update: dict[str, Any]) -> str:
-    metadata = update.get("compact_metadata", {}) if isinstance(update, dict) else {}
-    summarized = metadata.get("summarized_messages", 0)
-    kept = metadata.get("kept_messages", 0)
-    return f"已压缩上下文：摘要 {summarized} 条历史消息，保留 {kept} 条最近消息。"
-
-
-def _handle_agent_slash_command(request: ModelRequest, *, is_async: bool = False) -> Any | None:
-    parsed = _agent_slash_command_request(request)
-    if not parsed:
-        return None
-
-    command, messages_without_command = parsed
-    command_id = command.message_id
-
-    if command.name == HELP_COMMAND:
-        update = _remove_manual_command_update(command_id)
-        log_event("command.help", source="agent_context")
-        return _manual_compact_model_response(update, HELP_RESPONSE)
-
-    if command.name == CLEAR_COMMAND:
-        log_event("command.clear", source="agent_context", checkpoint_updated=True)
-        return _manual_compact_model_response(clear_context_update(), CLEAR_RESPONSE)
-
-    if command.name != COMPACT_COMMAND:
-        return None
-
-    # /compact 是控制命令，不交给主模型；它和自动压缩复用同一套 compact state update。
-    async def _run_async_compact() -> ExtendedModelResponse:
-        try:
-            update = await manual_acompact_state(request.state, focus=command.args, messages=messages_without_command)
-        except Exception as exc:
-            update = _compact_failure_update(request.state, exc) | _remove_manual_command_update(command_id)
-            return _manual_compact_model_response(update, f"上下文压缩失败：{exc}")
-        if not update:
-            update = _remove_manual_command_update(command_id)
-            return _manual_compact_model_response(update, "当前会话消息数量较少，暂无可压缩的历史上下文。")
-        return _manual_compact_model_response(update, _manual_compact_success_message(update))
-
-    if is_async:
-        return _run_async_compact()
-
-    try:
-        update = manual_compact_state(request.state, focus=command.args, messages=messages_without_command)
-    except Exception as exc:
-        update = _compact_failure_update(request.state, exc) | _remove_manual_command_update(command_id)
-        return _manual_compact_model_response(update, f"上下文压缩失败：{exc}")
-    if not update:
-        update = _remove_manual_command_update(command_id)
-        return _manual_compact_model_response(update, "当前会话消息数量较少，暂无可压缩的历史上下文。")
-    return _manual_compact_model_response(update, _manual_compact_success_message(update))
 
 
 class AgentContextCompactMiddleware(AgentMiddleware):
     """Track context usage and compact old messages near the context limit."""
 
     def before_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
-        if _state_has_slash_command(state):
-            return None
         try:
             update = _snip_compact_state(state) or _compact_state(state)
         except Exception as exc:
@@ -830,8 +735,6 @@ class AgentContextCompactMiddleware(AgentMiddleware):
         return update or None
 
     async def abefore_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
-        if _state_has_slash_command(state):
-            return None
         try:
             update = _snip_compact_state(state)
             if not update:
@@ -841,10 +744,6 @@ class AgentContextCompactMiddleware(AgentMiddleware):
         return update or None
 
     def wrap_model_call(self, request: ModelRequest, handler: Any) -> Any:
-        command_response = _handle_agent_slash_command(request)
-        if command_response is not None:
-            return command_response
-
         response = handler(request)
         if isinstance(response, ModelResponse):
             usage = _response_usage(response, request) or _context_usage_or_error(request)
@@ -855,12 +754,6 @@ class AgentContextCompactMiddleware(AgentMiddleware):
         return response
 
     async def awrap_model_call(self, request: ModelRequest, handler: Any) -> Any:
-        command_response = _handle_agent_slash_command(request, is_async=True)
-        if command_response is not None:
-            if asyncio.iscoroutine(command_response):
-                return await command_response
-            return command_response
-
         response = await handler(request)
         if isinstance(response, ModelResponse):
             usage = _response_usage(response, request) or await asyncio.to_thread(
