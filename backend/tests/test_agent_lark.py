@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import agent_lark
+from agent_commands import CLEAR_RESPONSE, HELP_RESPONSE
 
 
 class AgentLarkTest(unittest.TestCase):
@@ -148,7 +149,28 @@ class AgentLarkTest(unittest.TestCase):
 
         self.assertEqual(calls[0][0], {"configurable": {"thread_id": thread_id}})
         self.assertEqual(agent_lark._history_for_thread(thread_id), [])
-        self.assertEqual(send_text.call_args.args[:2], ("oc_clear", agent_lark.CLEAR_RESPONSE))
+        self.assertEqual(send_text.call_args.args[:2], ("oc_clear", CLEAR_RESPONSE))
+
+    def test_bridge_help_command_replies_without_invoking_graph(self):
+        graph = SimpleNamespace(invoke=lambda *_args, **_kwargs: self.fail("/help must not invoke the model"))
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        event = SimpleNamespace(
+            event=SimpleNamespace(
+                sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_1")),
+                message=SimpleNamespace(
+                    message_id="om_help",
+                    chat_id="oc_help",
+                    message_type="text",
+                    content=json.dumps({"text": "/help"}),
+                ),
+            )
+        )
+
+        with patch("agent_lark.send_lark_text") as send_text:
+            bridge.handle_event(event)
+            bridge.executor.shutdown(wait=True)
+
+        self.assertEqual(send_text.call_args.args[:2], ("oc_help", HELP_RESPONSE))
 
 
 if __name__ == "__main__":

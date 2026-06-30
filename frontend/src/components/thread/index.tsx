@@ -206,11 +206,6 @@ export function Thread() {
     e.preventDefault();
     if ((input.trim().length === 0 && contentBlocks.length === 0) || isLoading)
       return;
-    if (input.trim().toLowerCase() === "/clear" && contentBlocks.length === 0) {
-      setInput("");
-      await stream.clearContext();
-      return;
-    }
     setFirstTokenReceived(false);
 
     const newHumanMessage: Message = {

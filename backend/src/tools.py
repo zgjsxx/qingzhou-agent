@@ -765,15 +765,15 @@ def load_skill(name: str) -> str:
 
 @tool
 def compact(focus: str = "") -> str:
-    """Placeholder for future conversation context compaction.
+    """Tell the user how to trigger manual conversation context compaction.
 
     Args:
         focus: Optional note about what details a future compaction should preserve.
     """
     note = f"\nFocus: {focus.strip()}" if focus and focus.strip() else ""
     return (
-        f"{MANUAL_COMPACT_MARKER} Context compaction is currently disabled; "
-        f"no messages were summarized or removed.{note}"
+        f"{MANUAL_COMPACT_MARKER} Manual context compaction is available as a slash command. "
+        f"Ask the user to send `/compact` directly; optional focus text can follow the command.{note}"
     )
 
 

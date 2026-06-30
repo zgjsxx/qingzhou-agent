@@ -34,6 +34,16 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from agent_config import config_str
+from agent_commands import (
+    CLEAR_COMMAND,
+    CLEAR_RESPONSE,
+    COMPACT_COMMAND,
+    HELP_COMMAND,
+    HELP_RESPONSE,
+    SlashCommand,
+    clear_context_update,
+    parse_slash_command_messages,
+)
 from agent_logging import log_event
 from agent_prompt import BASE_COMPACT_PROMPT, NO_TOOLS_PREAMBLE, NO_TOOLS_TRAILER
 from llm_config import configure_provider_env, provider_model_kwargs
@@ -42,6 +52,7 @@ MANUAL_COMPACT_MARKER = "[compact requested]"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
 DEFAULT_COMPACT_MARGIN_TOKENS = 13_000
 DEFAULT_COMPACT_KEEP_MESSAGES = 20
+DEFAULT_MANUAL_COMPACT_KEEP_MESSAGES = 0
 DEFAULT_COMPACT_MAX_FAILURES = 3
 DEFAULT_SNIP_TRIGGER_MESSAGES = 50
 DEFAULT_SNIP_KEEP_HEAD_MESSAGES = 3
@@ -64,6 +75,8 @@ class CompactMetadata(TypedDict):
     summarized_messages: int
     kept_messages: int
     failures: int
+    trigger: NotRequired[str]
+    focus: NotRequired[str]
 
 
 class SnipCompactMetadata(TypedDict):
@@ -203,6 +216,13 @@ def _state_value(state: Any, key: str, default: Any = None) -> Any:
     if isinstance(state, dict):
         return state.get(key, default)
     return getattr(state, key, default)
+
+
+def _manual_compact_before_tokens(state: Any) -> int | None:
+    usage = _state_value(state, "context_usage", {}) or {}
+    if not isinstance(usage, dict):
+        return None
+    return _optional_int(usage.get("input_tokens"))
 
 
 def _should_auto_compact_state(state: Any) -> tuple[bool, int | None]:
@@ -345,8 +365,13 @@ def _snip_compact_state(state: Any) -> dict[str, Any]:
     }
 
 
-def _split_messages_for_compaction(messages: list[BaseMessage]) -> tuple[list[BaseMessage], list[BaseMessage]]:
-    keep_count = _int_env("AGENT_COMPACT_KEEP_MESSAGES", DEFAULT_COMPACT_KEEP_MESSAGES)
+def _split_messages_for_compaction(
+    messages: list[BaseMessage],
+    keep_count: int | None = None,
+) -> tuple[list[BaseMessage], list[BaseMessage]]:
+    keep_count = _int_env("AGENT_COMPACT_KEEP_MESSAGES", DEFAULT_COMPACT_KEEP_MESSAGES) if keep_count is None else keep_count
+    if keep_count <= 0:
+        return messages, []
     if len(messages) <= keep_count:
         return [], messages
 
@@ -430,14 +455,15 @@ def _format_compact_summary(text: str) -> str:
     return without_analysis
 
 
-def _summary_request_messages(messages_to_summarize: list[BaseMessage]) -> list[BaseMessage]:
+def _summary_request_messages(messages_to_summarize: list[BaseMessage], focus: str = "") -> list[BaseMessage]:
     transcript = _serialize_messages_for_summary(messages_to_summarize)
+    focus_block = f"\n\n<focus>\n{focus}\n</focus>" if focus else ""
     # summary 模型只需要两类输入：
     # - SystemMessage：压缩规则和输出格式要求。
     # - HumanMessage：被压缩的历史消息，统一包在 <messages> 中，避免和规则混在一起。
     return [
         SystemMessage(content=_compact_prompt()),
-        HumanMessage(content=f"<messages>\n{transcript}\n</messages>"),
+        HumanMessage(content=f"<messages>\n{transcript}\n</messages>{focus_block}"),
     ]
 
 
@@ -478,26 +504,31 @@ def _clean_summary_model() -> Any:
     )
 
 
-def _summarize_messages(messages_to_summarize: list[BaseMessage]) -> str:
+def _summarize_messages(messages_to_summarize: list[BaseMessage], focus: str = "") -> str:
     response = _clean_summary_model().invoke(
-        _summary_request_messages(messages_to_summarize),
+        _summary_request_messages(messages_to_summarize, focus=focus),
         config={"callbacks": [], "tags": ["context-compaction-summary"]},
     )
     return _format_compact_summary(_extract_text(response))
 
 
-async def _asummarize_messages(messages_to_summarize: list[BaseMessage]) -> str:
+async def _asummarize_messages(messages_to_summarize: list[BaseMessage], focus: str = "") -> str:
     response = await _clean_summary_model().ainvoke(
-        _summary_request_messages(messages_to_summarize),
+        _summary_request_messages(messages_to_summarize, focus=focus),
         config={"callbacks": [], "tags": ["context-compaction-summary"]},
     )
     return _format_compact_summary(_extract_text(response))
 
 
-def _compact_boundary_message(before_tokens: int | None, summarized_count: int, kept_count: int) -> SystemMessage:
+def _compact_boundary_message(
+    before_tokens: int | None,
+    summarized_count: int,
+    kept_count: int,
+    trigger: str,
+) -> SystemMessage:
     return SystemMessage(
         content=(
-            "[Context compacted automatically]\n"
+            f"[Context compacted by {trigger}]\n"
             f"Compacted at: {datetime.now(timezone.utc).isoformat()}\n"
             f"Before compact input tokens: {before_tokens if before_tokens is not None else 'unknown'}\n"
             f"Messages summarized: {summarized_count}\n"
@@ -522,9 +553,10 @@ def _build_compacted_messages(
     messages_to_keep: list[BaseMessage],
     summary: str,
     before_tokens: int | None,
+    trigger: str,
 ) -> list[BaseMessage]:
     return [
-        _compact_boundary_message(before_tokens, len(messages_to_summarize), len(messages_to_keep)),
+        _compact_boundary_message(before_tokens, len(messages_to_summarize), len(messages_to_keep), trigger),
         _summary_message(summary),
         *messages_to_keep,
     ]
@@ -534,68 +566,164 @@ def _replace_messages_update(messages: list[BaseMessage]) -> list[BaseMessage]:
     return [RemoveMessage(id=REMOVE_ALL_MESSAGES, content=""), *messages]
 
 
-def _compact_state(state: Any) -> dict[str, Any]:
-    should_compact, before_tokens = _should_auto_compact_state(state)
-    if not should_compact:
-        return {}
-
-    messages = list(_state_value(state, "messages", []) or [])
-    messages_to_summarize, messages_to_keep = _split_messages_for_compaction(messages)
-    if not messages_to_summarize:
-        return {}
-
-    summary = _summarize_messages(messages_to_summarize)
-    compacted_messages = _build_compacted_messages(messages_to_summarize, messages_to_keep, summary, before_tokens)
+def _compact_metadata(
+    *,
+    before_tokens: int | None,
+    summarized_messages: int,
+    kept_messages: int,
+    trigger: str,
+    focus: str,
+) -> CompactMetadata:
     metadata: CompactMetadata = {
         "last_compacted_at": datetime.now(timezone.utc).isoformat(),
         "before_tokens": before_tokens,
-        "summarized_messages": len(messages_to_summarize),
-        "kept_messages": len(messages_to_keep),
+        "summarized_messages": summarized_messages,
+        "kept_messages": kept_messages,
         "failures": 0,
+        "trigger": trigger,
     }
+    if focus:
+        metadata["focus"] = focus
+    return metadata
+
+
+def _compact_state_update(
+    *,
+    messages_to_summarize: list[BaseMessage],
+    messages_to_keep: list[BaseMessage],
+    summary: str,
+    before_tokens: int | None,
+    trigger: str,
+    focus: str,
+) -> dict[str, Any]:
+    # 自动压缩和手动 /compact 最终都从这里生成 LangGraph state update。
+    # 这样消息替换、metadata 字段、日志结构保持一套语义，后续改压缩格式时不会出现两边不一致。
+    compacted_messages = _build_compacted_messages(
+        messages_to_summarize,
+        messages_to_keep,
+        summary,
+        before_tokens,
+        trigger,
+    )
+    metadata = _compact_metadata(
+        before_tokens=before_tokens,
+        summarized_messages=len(messages_to_summarize),
+        kept_messages=len(messages_to_keep),
+        trigger=trigger,
+        focus=focus,
+    )
     log_event(
         "context.compact",
         before_tokens=before_tokens,
         summarized_messages=len(messages_to_summarize),
         kept_messages=len(messages_to_keep),
+        trigger=trigger,
+        focus_present=bool(focus),
     )
     return {
         "messages": _replace_messages_update(compacted_messages),
         "compact_metadata": metadata,
         "compact_failure_count": 0,
     }
+
+
+def _compact_state_now(
+    state: Any,
+    *,
+    before_tokens: int | None,
+    trigger: str,
+    focus: str = "",
+    keep_messages: int | None = None,
+    messages: list[BaseMessage] | None = None,
+) -> dict[str, Any]:
+    # 这里不再判断是否“应该压缩”，只负责执行压缩动作。
+    # 自动触发先用 _should_auto_compact_state 判断，手动 /compact 则直接调用同一个动作入口。
+    source_messages = list(messages if messages is not None else (_state_value(state, "messages", []) or []))
+    messages_to_summarize, messages_to_keep = _split_messages_for_compaction(source_messages, keep_count=keep_messages)
+    if not messages_to_summarize:
+        return {}
+
+    summary = _summarize_messages(messages_to_summarize, focus=focus)
+    return _compact_state_update(
+        messages_to_summarize=messages_to_summarize,
+        messages_to_keep=messages_to_keep,
+        summary=summary,
+        before_tokens=before_tokens,
+        trigger=trigger,
+        focus=focus,
+    )
+
+
+async def _acompact_state_now(
+    state: Any,
+    *,
+    before_tokens: int | None,
+    trigger: str,
+    focus: str = "",
+    keep_messages: int | None = None,
+    messages: list[BaseMessage] | None = None,
+) -> dict[str, Any]:
+    source_messages = list(messages if messages is not None else (_state_value(state, "messages", []) or []))
+    messages_to_summarize, messages_to_keep = _split_messages_for_compaction(source_messages, keep_count=keep_messages)
+    if not messages_to_summarize:
+        return {}
+
+    summary = await _asummarize_messages(messages_to_summarize, focus=focus)
+    return _compact_state_update(
+        messages_to_summarize=messages_to_summarize,
+        messages_to_keep=messages_to_keep,
+        summary=summary,
+        before_tokens=before_tokens,
+        trigger=trigger,
+        focus=focus,
+    )
+
+
+def _compact_state(state: Any) -> dict[str, Any]:
+    should_compact, before_tokens = _should_auto_compact_state(state)
+    if not should_compact:
+        return {}
+    return _compact_state_now(state, before_tokens=before_tokens, trigger="auto")
 
 
 async def _acompact_state(state: Any) -> dict[str, Any]:
     should_compact, before_tokens = _should_auto_compact_state(state)
     if not should_compact:
         return {}
+    return await _acompact_state_now(state, before_tokens=before_tokens, trigger="auto")
 
-    messages = list(_state_value(state, "messages", []) or [])
-    messages_to_summarize, messages_to_keep = _split_messages_for_compaction(messages)
-    if not messages_to_summarize:
-        return {}
 
-    summary = await _asummarize_messages(messages_to_summarize)
-    compacted_messages = _build_compacted_messages(messages_to_summarize, messages_to_keep, summary, before_tokens)
-    metadata: CompactMetadata = {
-        "last_compacted_at": datetime.now(timezone.utc).isoformat(),
-        "before_tokens": before_tokens,
-        "summarized_messages": len(messages_to_summarize),
-        "kept_messages": len(messages_to_keep),
-        "failures": 0,
-    }
-    log_event(
-        "context.compact",
-        before_tokens=before_tokens,
-        summarized_messages=len(messages_to_summarize),
-        kept_messages=len(messages_to_keep),
+def manual_compact_state(state: Any, *, focus: str = "", messages: list[BaseMessage] | None = None) -> dict[str, Any]:
+    # 对外保留一个明确的手动压缩入口，便于命令、工具或后续飞书入口复用。
+    # 它不另写压缩逻辑，只把 trigger/focus 传入共享的 _compact_state_now。
+    # 手动 /compact 表达的是“现在尽量收缩上下文”，因此默认不再沿用自动压缩保留 20 条的策略。
+    # 如果某些部署希望手动压缩后仍保留最近几条原文，可通过 AGENT_MANUAL_COMPACT_KEEP_MESSAGES 调整。
+    keep_messages = _int_env("AGENT_MANUAL_COMPACT_KEEP_MESSAGES", DEFAULT_MANUAL_COMPACT_KEEP_MESSAGES, minimum=0)
+    return _compact_state_now(
+        state,
+        before_tokens=_manual_compact_before_tokens(state),
+        trigger="manual",
+        focus=focus,
+        keep_messages=keep_messages,
+        messages=messages,
     )
-    return {
-        "messages": _replace_messages_update(compacted_messages),
-        "compact_metadata": metadata,
-        "compact_failure_count": 0,
-    }
+
+
+async def manual_acompact_state(
+    state: Any,
+    *,
+    focus: str = "",
+    messages: list[BaseMessage] | None = None,
+) -> dict[str, Any]:
+    keep_messages = _int_env("AGENT_MANUAL_COMPACT_KEEP_MESSAGES", DEFAULT_MANUAL_COMPACT_KEEP_MESSAGES, minimum=0)
+    return await _acompact_state_now(
+        state,
+        before_tokens=_manual_compact_before_tokens(state),
+        trigger="manual",
+        focus=focus,
+        keep_messages=keep_messages,
+        messages=messages,
+    )
 
 
 def _compact_failure_update(state: Any, exc: Exception) -> dict[str, Any]:
@@ -604,10 +732,97 @@ def _compact_failure_update(state: Any, exc: Exception) -> dict[str, Any]:
     return {"compact_failure_count": failure_count}
 
 
+def _state_has_slash_command(state: Any) -> bool:
+    return parse_slash_command_messages(list(_state_value(state, "messages", []) or [])) is not None
+
+
+def _agent_slash_command_request(request: ModelRequest) -> tuple[SlashCommand, list[BaseMessage]] | None:
+    state_messages = list(_state_value(request.state, "messages", []) or [])
+    request_messages = list(request.messages or [])
+    state_command = parse_slash_command_messages(state_messages)
+    request_command = parse_slash_command_messages(request_messages)
+    command = state_command or request_command
+    if not command:
+        return None
+
+    # 优先以 state 中真实落库的最后一条用户消息为准；request.messages 可能被其它 middleware 注入记忆文本，
+    # 适合作为识别兜底，但不适合直接决定要删除哪条 checkpoint 消息。
+    messages_without_command = state_messages[:-1] if state_command and state_messages else state_messages
+    return command, messages_without_command
+
+
+def _remove_manual_command_update(command_id: str | None) -> dict[str, Any]:
+    if not command_id:
+        return {}
+    return {"messages": [RemoveMessage(id=command_id, content="")]}
+
+
+def _manual_compact_model_response(update: dict[str, Any], content: str) -> ExtendedModelResponse:
+    return ExtendedModelResponse(
+        model_response=ModelResponse(result=[AIMessage(content=content)]),
+        command=Command(update=update),
+    )
+
+
+def _manual_compact_success_message(update: dict[str, Any]) -> str:
+    metadata = update.get("compact_metadata", {}) if isinstance(update, dict) else {}
+    summarized = metadata.get("summarized_messages", 0)
+    kept = metadata.get("kept_messages", 0)
+    return f"已压缩上下文：摘要 {summarized} 条历史消息，保留 {kept} 条最近消息。"
+
+
+def _handle_agent_slash_command(request: ModelRequest, *, is_async: bool = False) -> Any | None:
+    parsed = _agent_slash_command_request(request)
+    if not parsed:
+        return None
+
+    command, messages_without_command = parsed
+    command_id = command.message_id
+
+    if command.name == HELP_COMMAND:
+        update = _remove_manual_command_update(command_id)
+        log_event("command.help", source="agent_context")
+        return _manual_compact_model_response(update, HELP_RESPONSE)
+
+    if command.name == CLEAR_COMMAND:
+        log_event("command.clear", source="agent_context", checkpoint_updated=True)
+        return _manual_compact_model_response(clear_context_update(), CLEAR_RESPONSE)
+
+    if command.name != COMPACT_COMMAND:
+        return None
+
+    # /compact 是控制命令，不交给主模型；它和自动压缩复用同一套 compact state update。
+    async def _run_async_compact() -> ExtendedModelResponse:
+        try:
+            update = await manual_acompact_state(request.state, focus=command.args, messages=messages_without_command)
+        except Exception as exc:
+            update = _compact_failure_update(request.state, exc) | _remove_manual_command_update(command_id)
+            return _manual_compact_model_response(update, f"上下文压缩失败：{exc}")
+        if not update:
+            update = _remove_manual_command_update(command_id)
+            return _manual_compact_model_response(update, "当前会话消息数量较少，暂无可压缩的历史上下文。")
+        return _manual_compact_model_response(update, _manual_compact_success_message(update))
+
+    if is_async:
+        return _run_async_compact()
+
+    try:
+        update = manual_compact_state(request.state, focus=command.args, messages=messages_without_command)
+    except Exception as exc:
+        update = _compact_failure_update(request.state, exc) | _remove_manual_command_update(command_id)
+        return _manual_compact_model_response(update, f"上下文压缩失败：{exc}")
+    if not update:
+        update = _remove_manual_command_update(command_id)
+        return _manual_compact_model_response(update, "当前会话消息数量较少，暂无可压缩的历史上下文。")
+    return _manual_compact_model_response(update, _manual_compact_success_message(update))
+
+
 class AgentContextCompactMiddleware(AgentMiddleware):
     """Track context usage and compact old messages near the context limit."""
 
     def before_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
+        if _state_has_slash_command(state):
+            return None
         try:
             update = _snip_compact_state(state) or _compact_state(state)
         except Exception as exc:
@@ -615,6 +830,8 @@ class AgentContextCompactMiddleware(AgentMiddleware):
         return update or None
 
     async def abefore_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
+        if _state_has_slash_command(state):
+            return None
         try:
             update = _snip_compact_state(state)
             if not update:
@@ -624,6 +841,10 @@ class AgentContextCompactMiddleware(AgentMiddleware):
         return update or None
 
     def wrap_model_call(self, request: ModelRequest, handler: Any) -> Any:
+        command_response = _handle_agent_slash_command(request)
+        if command_response is not None:
+            return command_response
+
         response = handler(request)
         if isinstance(response, ModelResponse):
             usage = _response_usage(response, request) or _context_usage_or_error(request)
@@ -634,6 +855,12 @@ class AgentContextCompactMiddleware(AgentMiddleware):
         return response
 
     async def awrap_model_call(self, request: ModelRequest, handler: Any) -> Any:
+        command_response = _handle_agent_slash_command(request, is_async=True)
+        if command_response is not None:
+            if asyncio.iscoroutine(command_response):
+                return await command_response
+            return command_response
+
         response = await handler(request)
         if isinstance(response, ModelResponse):
             usage = _response_usage(response, request) or await asyncio.to_thread(

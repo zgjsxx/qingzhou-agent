@@ -16,7 +16,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from agent_commands import CLEAR_RESPONSE, clear_thread_context, is_clear_command
+from agent_commands import handle_thread_slash_command
 from agent_logging import log_event
 
 LARK_API_BASE_URL = "https://open.feishu.cn/open-apis"
@@ -361,25 +361,16 @@ class LarkWsBridge:
             return
 
         thread_id = _thread_id_for_chat(event.chat_id)
-        if is_clear_command(event.text):
-            try:
-                clear_thread_context(self.graph, thread_id, source="lark")
+        command_result = handle_thread_slash_command(event.text, self.graph, thread_id, source="lark")
+        if command_result:
+            if command_result.clear_history:
                 _clear_thread_history(thread_id)
-                send_lark_text(event.chat_id, CLEAR_RESPONSE, app_id=self.app_id, app_secret=self.app_secret)
-            except Exception as exc:
-                log_event(
-                    "lark.command_error",
-                    command="/clear",
-                    chat_id=event.chat_id,
-                    thread_id=thread_id,
-                    error=repr(exc),
-                )
-                send_lark_text(
-                    event.chat_id,
-                    f"清除会话上下文失败：{exc}",
-                    app_id=self.app_id,
-                    app_secret=self.app_secret,
-                )
+            send_lark_text(
+                event.chat_id,
+                command_result.response,
+                app_id=self.app_id,
+                app_secret=self.app_secret,
+            )
             return
 
         user_content = (
