@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Plug, Plus, Settings, Sparkles, Trash2, XIcon } from "lucide-react";
+import {
+  Activity,
+  ChevronRight,
+  Plus,
+  Plug,
+  Settings,
+  Sparkles,
+  Trash2,
+  XIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
@@ -449,128 +458,306 @@ function ConfigPage(props: {
   onAddSshHost: () => void;
   onRemoveSshHost: (index: number) => void;
 }) {
+  const [activeSection, setActiveSection] = useState<"llm" | "ssh">("llm");
+  const [selectedSshIndex, setSelectedSshIndex] = useState(0);
+
+  useEffect(() => {
+    /* SSH 主机现在支持动态增删。
+       这里在列表长度变化后主动修正选中下标，避免删除最后一项或切换数据源后，
+       右侧详情仍指向一个已经不存在的 index，造成空白表单或受控组件告警。 */
+    if (props.config.ssh.length === 0) {
+      setSelectedSshIndex(0);
+      return;
+    }
+    if (selectedSshIndex >= props.config.ssh.length) {
+      setSelectedSshIndex(props.config.ssh.length - 1);
+    }
+  }, [props.config.ssh.length, selectedSshIndex]);
+
+  const selectedSsh = props.config.ssh[selectedSshIndex] ?? null;
+
+  const navItems = [
+    {
+      key: "llm" as const,
+      label: "LLM",
+      summary: props.config.llm.model || props.config.llm.adapterType || "Not configured",
+      count: null,
+    },
+    {
+      key: "ssh" as const,
+      label: "SSH Hosts",
+      summary:
+        props.config.ssh.length > 0
+          ? `${props.config.ssh.length} host${props.config.ssh.length > 1 ? "s" : ""}`
+          : "No hosts",
+      count: props.config.ssh.length,
+    },
+  ];
+
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <Card className="rounded-lg">
-          <CardHeader>
-            <CardTitle>LLM</CardTitle>
-            <CardDescription>
-              Environment variables still take precedence. Restart the backend
-              after changing these values.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4">
-            <LabeledInput
-              label="Adapter"
-              value={props.config.llm.adapterType}
-              onChange={(value) => props.onChange("llm", "adapterType", value)}
-            />
-            <LabeledInput
-              label="Model"
-              value={props.config.llm.model}
-              onChange={(value) => props.onChange("llm", "model", value)}
-            />
-            <LabeledInput
-              label="Base URL"
-              value={props.config.llm.baseUrl}
-              onChange={(value) => props.onChange("llm", "baseUrl", value)}
-            />
-            <LabeledInput
-              label="API Key"
-              type="password"
-              value={props.config.llm.apiKey}
-              onChange={(value) => props.onChange("llm", "apiKey", value)}
-            />
-          </CardContent>
-        </Card>
+      <div className="grid min-h-[620px] grid-cols-1 gap-5 lg:grid-cols-[200px_minmax(0,1fr)]">
+        <aside className="bg-muted/30 flex flex-col rounded-lg border p-2">
+          <div className="px-3 py-2">
+            <h3 className="text-sm font-semibold">Settings</h3>
+            <p className="text-muted-foreground text-xs leading-5">
+              Select a section to edit.
+            </p>
+          </div>
 
-        <Card className="rounded-lg">
-          <CardHeader>
-            <CardTitle>SSH</CardTitle>
-            <CardDescription>
-              Configure one or more SSH hosts. The agent auto-selects by host
-              matching; the first entry is the default.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4">
-            {props.config.ssh.map((ssh, index) => (
-              <div key={index} className="rounded-md border p-4 grid gap-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">
-                    Host {index + 1}: {ssh.host || "(unnamed)"}
-                  </span>
+          <div className="mt-1 flex flex-col gap-1">
+            {navItems.map((item) => {
+              const active = activeSection === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setActiveSection(item.key)}
+                  className={`flex items-center justify-between rounded-md px-3 py-2 text-left transition ${
+                    active
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium">{item.label}</div>
+                    <div className="truncate text-xs">{item.summary}</div>
+                  </div>
+                  <div className="ml-3 flex shrink-0 items-center gap-2">
+                    {item.count !== null ? (
+                      <span className="bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
+                        {item.count}
+                      </span>
+                    ) : null}
+                    <ChevronRight className={`size-4 ${active ? "opacity-100" : "opacity-50"}`} />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        <div className="min-w-0">
+          {activeSection === "llm" ? (
+            <Card className="overflow-hidden rounded-lg">
+              <CardHeader>
+                <CardTitle>LLM</CardTitle>
+                <CardDescription>
+                  Environment variables still take precedence. Restart the backend
+                  after changing these values.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid max-w-2xl gap-4">
+                <LabeledInput
+                  label="Adapter"
+                  value={props.config.llm.adapterType}
+                  onChange={(value) => props.onChange("llm", "adapterType", value)}
+                />
+                <LabeledInput
+                  label="Model"
+                  value={props.config.llm.model}
+                  onChange={(value) => props.onChange("llm", "model", value)}
+                />
+                <LabeledInput
+                  label="Base URL"
+                  value={props.config.llm.baseUrl}
+                  onChange={(value) => props.onChange("llm", "baseUrl", value)}
+                />
+                <LabeledInput
+                  label="API Key"
+                  type="password"
+                  value={props.config.llm.apiKey}
+                  onChange={(value) => props.onChange("llm", "apiKey", value)}
+                />
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="rounded-lg">
+              <CardHeader>
+                <CardTitle>SSH Hosts</CardTitle>
+                <CardDescription>
+                  Configure one or more SSH hosts. The agent auto-selects by host
+                  matching; the first entry is the default.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid min-w-0 gap-5 2xl:grid-cols-[240px_minmax(0,1fr)]">
+                <div className="flex flex-col gap-3">
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">Host list</div>
+                    <div className="text-muted-foreground text-xs leading-5">
+                      Pick a host on the left, then edit its details on the right.
+                    </div>
+                  </div>
+
+                  <div className="flex max-h-[520px] flex-col gap-2 overflow-y-auto pr-1">
+                    {props.config.ssh.map((ssh, index) => {
+                      const active = selectedSshIndex === index;
+                      return (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => setSelectedSshIndex(index)}
+                          className={`rounded-md border px-3 py-3 text-left transition ${
+                            active
+                              ? "border-foreground/20 bg-muted"
+                              : "hover:bg-muted/60"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium">
+                                {ssh.host || `未命名主机 ${index + 1}`}
+                              </div>
+                              <div className="text-muted-foreground truncate text-xs">
+                                {ssh.user || "user not set"}
+                                {ssh.port ? `:${ssh.port}` : ""}
+                              </div>
+                            </div>
+                            {index === 0 ? (
+                              <span className="bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium">
+                                Default
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="text-muted-foreground mt-2 flex flex-wrap gap-2 text-[11px]">
+                            <span>{ssh.keyFile || ssh.privateKey ? "Key" : "No key"}</span>
+                            <span>{ssh.password ? "Password" : "No password"}</span>
+                            <span>{ssh.extraArgs ? "Extra args" : "Standard"}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
                   <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-7"
-                    onClick={() => props.onRemoveSshHost(index)}
-                    disabled={props.config.ssh.length <= 1}
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => {
+                      /* 新增主机后立即切到 SSH 页，并把焦点选中到新项。
+                         这样用户点击 “Add host” 后会直接看到新建条目的详情，不需要再额外点一次列表。 */
+                      props.onAddSshHost();
+                      setActiveSection("ssh");
+                      setSelectedSshIndex(props.config.ssh.length);
+                    }}
                   >
-                    <Trash2 className="size-4" />
+                    <Plus className="size-4" />
+                    Add host
                   </Button>
                 </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_120px]">
-                  <LabeledInput
-                    label="Host"
-                    value={ssh.host}
-                    onChange={(value) => props.onUpdateSshHost(index, "host", value)}
-                  />
-                  <LabeledInput
-                    label="Port"
-                    type="number"
-                    value={String(ssh.port || 22)}
-                    onChange={(value) =>
-                      props.onUpdateSshHost(index, "port", Number(value || 22))
-                    }
-                  />
+
+                <div className="min-w-0 overflow-hidden">
+                  {selectedSsh ? (
+                    <div className="grid gap-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-base font-semibold">
+                            {selectedSsh.host || `未命名主机 ${selectedSshIndex + 1}`}
+                          </div>
+                          <div className="text-muted-foreground text-sm">
+                            Edit connection, authentication, and advanced options.
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-2 text-destructive hover:text-destructive"
+                          onClick={() => props.onRemoveSshHost(selectedSshIndex)}
+                          disabled={props.config.ssh.length <= 1}
+                        >
+                          <Trash2 className="size-4" />
+                          Remove host
+                        </Button>
+                      </div>
+
+                      <section className="grid gap-4">
+                        <div className="text-sm font-medium">Connection</div>
+                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_96px]">
+                          <LabeledInput
+                            label="Host"
+                            value={selectedSsh.host}
+                            onChange={(value) =>
+                              props.onUpdateSshHost(selectedSshIndex, "host", value)
+                            }
+                          />
+                          <LabeledInput
+                            label="Port"
+                            type="number"
+                            value={String(selectedSsh.port || 22)}
+                            onChange={(value) =>
+                              props.onUpdateSshHost(
+                                selectedSshIndex,
+                                "port",
+                                Number(value || 22),
+                              )
+                            }
+                          />
+                        </div>
+                        <LabeledInput
+                          label="User"
+                          value={selectedSsh.user}
+                          onChange={(value) =>
+                            props.onUpdateSshHost(selectedSshIndex, "user", value)
+                          }
+                        />
+                      </section>
+
+                      <section className="grid gap-4">
+                        <div className="text-sm font-medium">Authentication</div>
+                        <LabeledInput
+                          label="Key File"
+                          value={selectedSsh.keyFile}
+                          onChange={(value) =>
+                            props.onUpdateSshHost(selectedSshIndex, "keyFile", value)
+                          }
+                        />
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor={`ssh-private-key-${selectedSshIndex}`}>Private Key</Label>
+                          <Textarea
+                            id={`ssh-private-key-${selectedSshIndex}`}
+                            value={selectedSsh.privateKey}
+                            onChange={(event) =>
+                              props.onUpdateSshHost(
+                                selectedSshIndex,
+                                "privateKey",
+                                event.target.value,
+                              )
+                            }
+                            className="min-h-44 font-mono text-xs"
+                            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                          />
+                        </div>
+                        <LabeledInput
+                          label="Password"
+                          type="password"
+                          value={selectedSsh.password}
+                          onChange={(value) =>
+                            props.onUpdateSshHost(selectedSshIndex, "password", value)
+                          }
+                        />
+                      </section>
+
+                      <section className="grid gap-4">
+                        <div className="text-sm font-medium">Advanced</div>
+                        <LabeledInput
+                          label="Extra Args"
+                          value={selectedSsh.extraArgs}
+                          onChange={(value) =>
+                            props.onUpdateSshHost(selectedSshIndex, "extraArgs", value)
+                          }
+                        />
+                      </section>
+                    </div>
+                  ) : (
+                    <div className="text-muted-foreground flex min-h-[320px] items-center justify-center rounded-md border border-dashed text-sm">
+                      No SSH host selected.
+                    </div>
+                  )}
                 </div>
-                <LabeledInput
-                  label="User"
-                  value={ssh.user}
-                  onChange={(value) => props.onUpdateSshHost(index, "user", value)}
-                />
-                <LabeledInput
-                  label="Key File"
-                  value={ssh.keyFile}
-                  onChange={(value) => props.onUpdateSshHost(index, "keyFile", value)}
-                />
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor={`ssh-private-key-${index}`}>Private Key</Label>
-                  <Textarea
-                    id={`ssh-private-key-${index}`}
-                    value={ssh.privateKey}
-                    onChange={(event) =>
-                      props.onUpdateSshHost(index, "privateKey", event.target.value)
-                    }
-                    className="min-h-36 font-mono text-xs"
-                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                  />
-                </div>
-                <LabeledInput
-                  label="Password"
-                  type="password"
-                  value={ssh.password}
-                  onChange={(value) => props.onUpdateSshHost(index, "password", value)}
-                />
-                <LabeledInput
-                  label="Extra Args"
-                  value={ssh.extraArgs}
-                  onChange={(value) => props.onUpdateSshHost(index, "extraArgs", value)}
-                />
-              </div>
-            ))}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full"
-              onClick={props.onAddSshHost}
-            >
-              <Plus className="size-4" />
-              Add host
-            </Button>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       </div>
 
       <div className="flex justify-end">
