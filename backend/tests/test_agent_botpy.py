@@ -116,6 +116,22 @@ class AgentBotpyTest(unittest.TestCase):
             agent_botpy.start_botpy_bridge(SimpleNamespace())
             self.assertFalse(agent_botpy._started)
 
+    def test_run_botpy_bridge_forever_creates_thread_local_event_loop(self):
+        loop = asyncio.new_event_loop()
+        bridge = SimpleNamespace(run_forever=lambda: None)
+
+        with (
+            patch("agent_botpy.asyncio.new_event_loop", return_value=loop) as new_loop,
+            patch("agent_botpy._run_with_blockbuster_skip") as run_with_skip,
+            patch("agent_botpy.asyncio.set_event_loop") as set_event_loop,
+        ):
+            agent_botpy._run_botpy_bridge_forever(bridge)
+
+        new_loop.assert_called_once()
+        set_event_loop.assert_any_call(loop)
+        set_event_loop.assert_any_call(None)
+        run_with_skip.assert_called_once_with(bridge.run_forever)
+
 
 if __name__ == "__main__":
     unittest.main()

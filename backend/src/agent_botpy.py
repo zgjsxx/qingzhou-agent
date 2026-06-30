@@ -266,7 +266,14 @@ class BotpyBridgeClient:
                 log_event("botpy.ready")
 
         self._client = _Client(intents=intents, is_sandbox=self.is_sandbox)
-        log_event("botpy.start")
+        log_event(
+            "botpy.start",
+            appid=self.appid,
+            sandbox=self.is_sandbox,
+            public_guild_messages=_bool_env("BOTPY_PUBLIC_GUILD_MESSAGES", True),
+            direct_message=_bool_env("BOTPY_DIRECT_MESSAGE", True),
+            public_messages=_bool_env("BOTPY_PUBLIC_MESSAGES", False),
+        )
         print("[xu-agent botpy] bridge starting", file=sys.stderr, flush=True)
         self._client.run(appid=self.appid, secret=self.secret)
 
@@ -283,6 +290,24 @@ def _run_with_blockbuster_skip(func: Any) -> None:
         func()
     finally:
         blockbuster_skip.reset(token)
+
+
+def _run_botpy_bridge_forever(bridge: BotpyBridgeClient) -> None:
+    """Run botpy inside a dedicated thread-local event loop.
+
+    qq-botpy 1.2.x constructs its Client with ``asyncio.get_event_loop()`` in
+    ``Client.__init__``. A plain daemon thread has no default loop on Python
+    3.11+, so we must create and bind one before instantiating/running the SDK.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        _run_with_blockbuster_skip(bridge.run_forever)
+    finally:
+        try:
+            loop.close()
+        finally:
+            asyncio.set_event_loop(None)
 
 
 def start_botpy_bridge(graph: Any) -> None:
@@ -311,7 +336,7 @@ def start_botpy_bridge(graph: Any) -> None:
 
     def run_bridge() -> None:
         try:
-            _run_with_blockbuster_skip(bridge.run_forever)
+            _run_botpy_bridge_forever(bridge)
         except Exception as exc:
             log_event("botpy.error", error=repr(exc))
             print(f"[xu-agent botpy] bridge stopped: {exc}", file=sys.stderr, flush=True)
