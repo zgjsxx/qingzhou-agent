@@ -22,6 +22,7 @@ from agent_logging import log_event
 LARK_API_BASE_URL = "https://open.feishu.cn/open-apis"
 DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 12000
+LARK_ACK_EMOJI = os.getenv("LARK_ACK_EMOJI_TYPE", "OK")
 
 _start_lock = threading.Lock()
 _started = False
@@ -270,16 +271,17 @@ def _get_tenant_access_token(app_id: str, app_secret: str) -> str:
         return _tenant_access_token_value
 
 
-def _post_lark_json(path: str, token: str, payload: dict[str, Any], query: dict[str, str] | None = None) -> dict[str, Any]:
+def _request_lark_json(path: str, token: str, payload: dict[str, Any] | None = None, *, method: str = "POST", query: dict[str, str] | None = None) -> dict[str, Any]:
     query_string = f"?{urllib.parse.urlencode(query)}" if query else ""
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    headers: dict[str, str] = {"Authorization": f"Bearer {token}"}
+    if data is not None:
+        headers["Content-Type"] = "application/json; charset=utf-8"
     request = urllib.request.Request(
         f"{LARK_API_BASE_URL}{path}{query_string}",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-        },
-        method="POST",
+        data=data,
+        headers=headers,
+        method=method,
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
@@ -287,6 +289,10 @@ def _post_lark_json(path: str, token: str, payload: dict[str, Any], query: dict[
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Lark API HTTP {exc.code}: {detail}") from exc
+
+
+def _post_lark_json(path: str, token: str, payload: dict[str, Any], query: dict[str, str] | None = None) -> dict[str, Any]:
+    return _request_lark_json(path, token, payload, query=query)
 
 
 def _reply_chunks(text: str) -> list[str]:
@@ -314,6 +320,35 @@ def send_lark_text(chat_id: str, text: str, *, app_id: str, app_secret: str) -> 
             raise RuntimeError(f"Lark send message failed: {response}")
 
 
+def add_lark_reaction(message_id: str, emoji_type: str = LARK_ACK_EMOJI, *, app_id: str, app_secret: str) -> str:
+    """Add an emoji reaction to a message, return the reaction_id."""
+    token = _get_tenant_access_token(app_id, app_secret)
+    path = f"/im/v1/messages/{message_id}/reactions"
+    response = _request_lark_json(path, token, {"reaction_type": {"emoji_type": emoji_type}})
+    if int(response.get("code") or 0) != 0:
+        raise RuntimeError(f"Lark add reaction failed: {response}")
+    return str(_get_value(response, "data", "reaction_id") or "")
+
+
+def delete_lark_reaction(message_id: str, reaction_id: str, *, app_id: str, app_secret: str) -> dict[str, Any]:
+    """Delete an emoji reaction from a message."""
+    token = _get_tenant_access_token(app_id, app_secret)
+    path = f"/im/v1/messages/{message_id}/reactions/{reaction_id}"
+    request = urllib.request.Request(
+        f"{LARK_API_BASE_URL}{path}",
+        data=None,
+        headers={"Authorization": f"Bearer {token}"},
+        method="DELETE",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        log_event("lark.reaction_delete_error", message_id=message_id, reaction_id=reaction_id, error=f"HTTP {exc.code}: {detail}")
+        return {"code": exc.code}
+
+
 class LarkWsBridge:
     def __init__(self, graph: Any, app_id: str, app_secret: str):
         self.graph = graph
@@ -338,13 +373,29 @@ class LarkWsBridge:
         if not _remember_seen_message(event.message_id):
             log_event("lark.event_ignored", reason="duplicate", message_id=event.message_id)
             return
-        self.executor.submit(self._process_event, event)
+        # Add ack reaction immediately (before worker pool processing)
+        reaction_id = ""
+        try:
+            reaction_id = add_lark_reaction(event.message_id, app_id=self.app_id, app_secret=self.app_secret)
+            log_event("lark.reaction_added", message_id=event.message_id, reaction_id=reaction_id)
+        except Exception as exc:
+            log_event("lark.reaction_add_error", message_id=event.message_id, error=repr(exc))
+        self.executor.submit(self._process_event, event, reaction_id)
 
-    def _process_event(self, event: LarkMessageEvent) -> None:
+    def _process_event(self, event: LarkMessageEvent, reaction_id: str = "") -> None:
         with _run_lock_for_chat(event.chat_id):
-            self._process_event_locked(event)
+            self._process_event_locked(event, reaction_id)
 
-    def _process_event_locked(self, event: LarkMessageEvent) -> None:
+    def _remove_reaction(self, event: LarkMessageEvent, reaction_id: str) -> None:
+        if not reaction_id:
+            return
+        try:
+            delete_lark_reaction(event.message_id, reaction_id, app_id=self.app_id, app_secret=self.app_secret)
+            log_event("lark.reaction_removed", message_id=event.message_id, reaction_id=reaction_id)
+        except Exception as exc:
+            log_event("lark.reaction_remove_error", message_id=event.message_id, reaction_id=reaction_id, error=repr(exc))
+
+    def _process_event_locked(self, event: LarkMessageEvent, reaction_id: str = "") -> None:
         if not event.text:
             log_event(
                 "lark.message_unsupported",
@@ -358,6 +409,7 @@ class LarkWsBridge:
                 app_id=self.app_id,
                 app_secret=self.app_secret,
             )
+            self._remove_reaction(event, reaction_id)
             return
 
         thread_id = _thread_id_for_chat(event.chat_id)
@@ -371,6 +423,7 @@ class LarkWsBridge:
                 app_id=self.app_id,
                 app_secret=self.app_secret,
             )
+            self._remove_reaction(event, reaction_id)
             return
 
         user_content = (
@@ -398,6 +451,7 @@ class LarkWsBridge:
             answer = extract_final_ai_text(result) or "我处理完了，但没有生成可发送的文本回复。"
             send_lark_text(event.chat_id, answer, app_id=self.app_id, app_secret=self.app_secret)
             log_event("lark.run_end", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
+            self._remove_reaction(event, reaction_id)
         except Exception as exc:
             log_event(
                 "lark.run_error",
@@ -421,6 +475,7 @@ class LarkWsBridge:
                     error=repr(send_exc),
                     traceback=traceback.format_exc(),
                 )
+            self._remove_reaction(event, reaction_id)
 
     def run_forever(self) -> None:
         try:

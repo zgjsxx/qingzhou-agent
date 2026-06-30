@@ -172,6 +172,97 @@ class AgentLarkTest(unittest.TestCase):
 
         self.assertEqual(send_text.call_args.args[:2], ("oc_help", HELP_RESPONSE))
 
+    def test_add_lark_reaction_returns_reaction_id(self):
+        with (
+            patch(
+                "agent_lark._get_tenant_access_token", return_value="tok",
+            ),
+            patch(
+                "agent_lark._request_lark_json",
+                return_value={"code": 0, "data": {"reaction_id": "re_abc"}},
+            ) as request_json,
+        ):
+            result = agent_lark.add_lark_reaction("om_1", app_id="app", app_secret="secret")
+        self.assertEqual(result, "re_abc")
+        request_json.assert_called_once()
+        self.assertIn("om_1/reactions", request_json.call_args.args[0])
+
+    def test_delete_lark_reaction_calls_delete_endpoint(self):
+        with (
+            patch("agent_lark._get_tenant_access_token", return_value="tok"),
+            patch("agent_lark.urllib.request.Request") as mock_request,
+            patch("agent_lark.urllib.request.urlopen") as mock_urlopen,
+        ):
+            mock_urlopen.return_value.__enter__ = lambda self: self
+            mock_urlopen.return_value.__exit__ = lambda self, *a: None
+            mock_urlopen.return_value.read.return_value = b'{"code": 0}'
+            agent_lark.delete_lark_reaction("om_1", "re_abc", app_id="app", app_secret="secret")
+        mock_request.assert_called_once()
+        call_url = mock_request.call_args.args[0]
+        self.assertIn("om_1/reactions/re_abc", call_url)
+        self.assertEqual(mock_request.call_args.kwargs["method"], "DELETE")
+
+    def test_handle_event_adds_reaction_before_processing(self):
+        graph = SimpleNamespace()
+        graph.invoke = lambda *_args, **_kwargs: {
+            "messages": [SimpleNamespace(type="ai", content="ok")]
+        }
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        event = SimpleNamespace(
+            event=SimpleNamespace(
+                sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_1")),
+                message=SimpleNamespace(
+                    message_id="om_react",
+                    chat_id="oc_react",
+                    message_type="text",
+                    content=json.dumps({"text": "hello"}),
+                ),
+            )
+        )
+
+        with (
+            patch("agent_lark.add_lark_reaction", return_value="re_1") as add_reaction,
+            patch("agent_lark.send_lark_text"),
+            patch("agent_lark.delete_lark_reaction") as del_reaction,
+        ):
+            bridge.handle_event(event)
+            bridge.executor.shutdown(wait=True)
+
+        add_reaction.assert_called_once_with("om_react", app_id="app", app_secret="secret")
+        del_reaction.assert_called_once_with("om_react", "re_1", app_id="app", app_secret="secret")
+
+    def test_process_event_removes_reaction_on_success(self):
+        graph = SimpleNamespace()
+        graph.invoke = lambda *_args, **_kwargs: {
+            "messages": [SimpleNamespace(type="ai", content="done")]
+        }
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_ok", chat_id="oc_ok", message_type="text", text="hi", sender_id="ou_1",
+        )
+
+        with (
+            patch("agent_lark.send_lark_text"),
+            patch("agent_lark.delete_lark_reaction") as del_reaction,
+        ):
+            bridge._process_event(event, "re_success")
+            del_reaction.assert_called_once_with("om_ok", "re_success", app_id="app", app_secret="secret")
+
+    def test_process_event_removes_reaction_on_failure(self):
+        graph = SimpleNamespace()
+        graph.invoke = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_err", chat_id="oc_err", message_type="text", text="hi", sender_id="ou_1",
+        )
+
+        with (
+            patch("agent_lark.send_lark_text"),
+            patch("agent_lark.delete_lark_reaction") as del_reaction,
+        ):
+            bridge._process_event(event, "re_fail")
+            del_reaction.assert_called_once_with("om_err", "re_fail", app_id="app", app_secret="secret")
+
 
 if __name__ == "__main__":
     unittest.main()
