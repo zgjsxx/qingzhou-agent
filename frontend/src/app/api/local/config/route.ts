@@ -6,6 +6,16 @@ const repoRoot = path.resolve(process.cwd(), "..");
 const backendDir = path.join(repoRoot, "backend");
 const configPath = path.join(backendDir, ".agent_config.json");
 
+const defaultHost = {
+  host: "",
+  user: "",
+  port: 22,
+  keyFile: "",
+  privateKey: "",
+  password: "",
+  extraArgs: "",
+};
+
 const defaultConfig = {
   llm: {
     adapterType: "anthropic",
@@ -13,15 +23,18 @@ const defaultConfig = {
     apiKey: "",
     baseUrl: "",
   },
-  ssh: {
-    host: "",
-    user: "",
-    port: 22,
-    keyFile: "",
-    privateKey: "",
-    extraArgs: "",
-  },
+  ssh: [] as typeof defaultHost[],
 };
+
+function migrateSsh(sshRaw: unknown): typeof defaultHost[] {
+  if (Array.isArray(sshRaw)) {
+    return sshRaw.map((h) => ({ ...defaultHost, ...h }));
+  }
+  if (sshRaw && typeof sshRaw === "object") {
+    return [{ ...defaultHost, ...sshRaw as typeof defaultHost }];
+  }
+  return [];
+}
 
 async function readConfig() {
   try {
@@ -29,7 +42,7 @@ async function readConfig() {
     const parsed = JSON.parse(raw);
     return {
       llm: { ...defaultConfig.llm, ...(parsed.llm ?? {}) },
-      ssh: { ...defaultConfig.ssh, ...(parsed.ssh ?? {}) },
+      ssh: migrateSsh(parsed.ssh),
     };
   } catch {
     return defaultConfig;
@@ -44,7 +57,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const nextConfig = {
     llm: { ...defaultConfig.llm, ...(body.llm ?? {}) },
-    ssh: { ...defaultConfig.ssh, ...(body.ssh ?? {}) },
+    ssh: migrateSsh(body.ssh),
   };
   await mkdir(backendDir, { recursive: true });
   await writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf-8");

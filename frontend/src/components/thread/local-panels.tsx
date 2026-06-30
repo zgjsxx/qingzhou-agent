@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Plug, Settings, Sparkles, XIcon } from "lucide-react";
+import { Activity, Plug, Plus, Settings, Sparkles, Trash2, XIcon } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Button } from "../ui/button";
@@ -34,6 +34,16 @@ type Plugin = {
   headerKeys: string[];
 };
 
+type SshHost = {
+  host: string;
+  user: string;
+  port: number;
+  keyFile: string;
+  privateKey: string;
+  password: string;
+  extraArgs: string;
+};
+
 type AgentConfig = {
   llm: {
     adapterType: string;
@@ -41,26 +51,22 @@ type AgentConfig = {
     apiKey: string;
     baseUrl: string;
   };
-  ssh: {
-    host: string;
-    user: string;
-    port: number;
-    keyFile: string;
-    privateKey: string;
-    extraArgs: string;
-  };
+  ssh: SshHost[];
+};
+
+const emptyHost: SshHost = {
+  host: "",
+  user: "",
+  port: 22,
+  keyFile: "",
+  privateKey: "",
+  password: "",
+  extraArgs: "",
 };
 
 const emptyConfig: AgentConfig = {
   llm: { adapterType: "anthropic", model: "glm-5.1", apiKey: "", baseUrl: "" },
-  ssh: {
-    host: "",
-    user: "",
-    port: 22,
-    keyFile: "",
-    privateKey: "",
-    extraArgs: "",
-  },
+  ssh: [],
 };
 
 export function LocalPanels() {
@@ -106,6 +112,28 @@ export function LocalPanels() {
         ...current[section],
         [key]: value,
       },
+    }));
+  };
+
+  const updateSshHost = (index: number, key: keyof SshHost, value: string | number) => {
+    setConfig((current) => {
+      const hosts = [...current.ssh];
+      hosts[index] = { ...hosts[index], [key]: value };
+      return { ...current, ssh: hosts };
+    });
+  };
+
+  const addSshHost = () => {
+    setConfig((current) => ({
+      ...current,
+      ssh: [...current.ssh, { ...emptyHost }],
+    }));
+  };
+
+  const removeSshHost = (index: number) => {
+    setConfig((current) => ({
+      ...current,
+      ssh: current.ssh.filter((_, i) => i !== index),
     }));
   };
 
@@ -260,6 +288,9 @@ export function LocalPanels() {
                   saving={saving}
                   onSave={saveConfig}
                   onChange={updateConfig}
+                  onUpdateSshHost={updateSshHost}
+                  onAddSshHost={addSshHost}
+                  onRemoveSshHost={removeSshHost}
                 />
               )}
             </div>
@@ -414,6 +445,9 @@ function ConfigPage(props: {
     key: string,
     value: string | number,
   ) => void;
+  onUpdateSshHost: (index: number, key: keyof SshHost, value: string | number) => void;
+  onAddSshHost: () => void;
+  onRemoveSshHost: (index: number) => void;
 }) {
   return (
     <div className="flex flex-col gap-5">
@@ -455,52 +489,86 @@ function ConfigPage(props: {
           <CardHeader>
             <CardTitle>SSH</CardTitle>
             <CardDescription>
-              Used by run_ssh_command when host, user, or key are omitted.
+              Configure one or more SSH hosts. The agent auto-selects by host
+              matching; the first entry is the default.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_120px]">
-              <LabeledInput
-                label="Host"
-                value={props.config.ssh.host}
-                onChange={(value) => props.onChange("ssh", "host", value)}
-              />
-              <LabeledInput
-                label="Port"
-                type="number"
-                value={String(props.config.ssh.port || 22)}
-                onChange={(value) =>
-                  props.onChange("ssh", "port", Number(value || 22))
-                }
-              />
-            </div>
-            <LabeledInput
-              label="User"
-              value={props.config.ssh.user}
-              onChange={(value) => props.onChange("ssh", "user", value)}
-            />
-            <LabeledInput
-              label="Key File"
-              value={props.config.ssh.keyFile}
-              onChange={(value) => props.onChange("ssh", "keyFile", value)}
-            />
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="ssh-private-key">Private Key</Label>
-              <Textarea
-                id="ssh-private-key"
-                value={props.config.ssh.privateKey}
-                onChange={(event) =>
-                  props.onChange("ssh", "privateKey", event.target.value)
-                }
-                className="min-h-36 font-mono text-xs"
-                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-              />
-            </div>
-            <LabeledInput
-              label="Extra Args"
-              value={props.config.ssh.extraArgs}
-              onChange={(value) => props.onChange("ssh", "extraArgs", value)}
-            />
+            {props.config.ssh.map((ssh, index) => (
+              <div key={index} className="rounded-md border p-4 grid gap-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">
+                    Host {index + 1}: {ssh.host || "(unnamed)"}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    onClick={() => props.onRemoveSshHost(index)}
+                    disabled={props.config.ssh.length <= 1}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_120px]">
+                  <LabeledInput
+                    label="Host"
+                    value={ssh.host}
+                    onChange={(value) => props.onUpdateSshHost(index, "host", value)}
+                  />
+                  <LabeledInput
+                    label="Port"
+                    type="number"
+                    value={String(ssh.port || 22)}
+                    onChange={(value) =>
+                      props.onUpdateSshHost(index, "port", Number(value || 22))
+                    }
+                  />
+                </div>
+                <LabeledInput
+                  label="User"
+                  value={ssh.user}
+                  onChange={(value) => props.onUpdateSshHost(index, "user", value)}
+                />
+                <LabeledInput
+                  label="Key File"
+                  value={ssh.keyFile}
+                  onChange={(value) => props.onUpdateSshHost(index, "keyFile", value)}
+                />
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`ssh-private-key-${index}`}>Private Key</Label>
+                  <Textarea
+                    id={`ssh-private-key-${index}`}
+                    value={ssh.privateKey}
+                    onChange={(event) =>
+                      props.onUpdateSshHost(index, "privateKey", event.target.value)
+                    }
+                    className="min-h-36 font-mono text-xs"
+                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                  />
+                </div>
+                <LabeledInput
+                  label="Password"
+                  type="password"
+                  value={ssh.password}
+                  onChange={(value) => props.onUpdateSshHost(index, "password", value)}
+                />
+                <LabeledInput
+                  label="Extra Args"
+                  value={ssh.extraArgs}
+                  onChange={(value) => props.onUpdateSshHost(index, "extraArgs", value)}
+                />
+              </div>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={props.onAddSshHost}
+            >
+              <Plus className="size-4" />
+              Add host
+            </Button>
           </CardContent>
         </Card>
       </div>
@@ -519,9 +587,14 @@ function ConfigPage(props: {
 }
 
 function mergeConfig(data: Partial<AgentConfig>): AgentConfig {
+  // Backward-compat: old format had ssh as a dict, wrap it into an array
+  const sshRaw = data.ssh ?? [];
+  const ssh: SshHost[] = Array.isArray(sshRaw)
+    ? sshRaw.map((h) => ({ ...emptyHost, ...h }))
+    : [{ ...emptyHost, ...sshRaw as unknown as SshHost }];
   return {
     llm: { ...emptyConfig.llm, ...(data.llm ?? {}) },
-    ssh: { ...emptyConfig.ssh, ...(data.ssh ?? {}) },
+    ssh,
   };
 }
 
