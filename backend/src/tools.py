@@ -10,6 +10,8 @@ import subprocess
 import time
 import glob as glob_module
 import json
+import io
+import socket
 import threading
 from contextvars import ContextVar
 from pathlib import Path
@@ -20,7 +22,7 @@ from agent_cron import cancel_job as cancel_cron_job
 from agent_cron import is_cron_enabled
 from agent_cron import list_jobs as list_cron_jobs
 from agent_cron import schedule_job as schedule_cron_job
-from agent_config import config_int, config_str
+from agent_config import config_int, config_str, ssh_host_entry
 from agent_context import MANUAL_COMPACT_MARKER
 from agent_memory import write_memory_file
 from agent_tasks import (
@@ -39,7 +41,6 @@ DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_OUTPUT_CHARS = 12000
 BACKGROUND_DIR = BACKEND_DIR / ".agent_outputs" / "background"
-SSH_KEY_DIR = BACKEND_DIR / ".agent_outputs" / "ssh_keys"
 BACKGROUND_DEFAULT_TIMEOUT_SECONDS = 1800
 BACKGROUND_TASKS_LOCK = threading.Lock()
 BACKGROUND_PROCESSES: dict[str, subprocess.Popen[str]] = {}
@@ -319,46 +320,6 @@ def _run_shell_process(
         return None, stdout, stderr, True
 
 
-def _run_ssh_process(argv: list[str], timeout: int) -> tuple[int | None, str, str, bool]:
-    # SSH 远程命令必须按“非交互工具调用”处理，不能复用后端进程的 stdin。
-    #
-    # 如果这里不显式关闭 stdin，OpenSSH 会把本地 stdin 转发给远端命令。后端服务
-    # 不是用户手动打开的终端，它的 stdin 可能一直保持打开但永远不给数据；远端命令
-    # 或登录脚本一旦执行 read/cat/sudo 等读取输入的逻辑，就会一直等待，直到工具层
-    # timeout。用户在终端里直接 ssh 不一定复现，因为终端有真实 TTY，输入/EOF 行为
-    # 和后台子进程不同。
-    #
-    # subprocess.DEVNULL 让远端读取输入时立即得到 EOF，配合 ssh -n / StdinNull=yes
-    # 保证本工具始终是可预测的非交互执行。
-    process = subprocess.Popen(
-        argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=_shell_env(),
-        **_popen_kwargs(),
-    )
-
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-        return process.returncode, stdout, stderr, False
-    except subprocess.TimeoutExpired as exc:
-        _kill_process_tree(process)
-        try:
-            stdout, stderr = process.communicate(timeout=1)
-        except subprocess.TimeoutExpired:
-            if process.poll() is None:
-                process.kill()
-            stdout = exc.stdout or ""
-            stderr = exc.stderr or ""
-            return None, stdout, stderr, True
-        stdout = stdout or exc.stdout or ""
-        stderr = stderr or exc.stderr or ""
-        return None, stdout, stderr, True
-
 
 def _run_shell_process_streaming(
     argv: list[str],
@@ -589,47 +550,84 @@ def _format_background_meta(meta: dict[str, object], include_output: bool = Fals
     return "\n".join(lines)
 
 
-def _ssh_config_value(explicit: str, key: str, default: str = "") -> str:
+def _ssh_config_value(explicit: str, key: str, target_host: str = "", default: str = "") -> str:
     value = str(explicit or "").strip()
-    return value if value else config_str("ssh", key, default)
+    if value:
+        return value
+    entry = ssh_host_entry(target_host)
+    entry_val = entry.get(key)
+    if entry_val is not None:
+        return str(entry_val).strip()
+    return default
 
 
-def _ssh_port(explicit: int | None) -> int:
+def _ssh_port(explicit: int | None, target_host: str = "") -> int:
     if explicit is not None:
         try:
             return int(explicit)
         except (TypeError, ValueError):
             pass
-    return config_int("ssh", "port", 22)
+    entry = ssh_host_entry(target_host)
+    try:
+        return int(entry.get("port", 22))
+    except (TypeError, ValueError):
+        return 22
 
 
-def _materialized_ssh_key(explicit_key_file: str = "") -> str:
-    key_file = _ssh_config_value(explicit_key_file, "keyFile")
+def _ssh_password(explicit_password: str = "", target_host: str = "") -> str:
+    value = str(explicit_password or "").strip()
+    if value:
+        return value
+    entry = ssh_host_entry(target_host)
+    return str(entry.get("password", "") or "").strip()
+
+
+def _ssh_private_key_text(target_host: str = "") -> str:
+    """Return the raw private key text from configuration (not a file path)."""
+    entry = ssh_host_entry(target_host)
+    return str(entry.get("privateKey", "") or "").strip()
+
+
+def _paramiko_connect(
+    host: str,
+    port: int,
+    user: str,
+    password: str = "",
+    key_file: str = "",
+    key_text: str = "",
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> "paramiko.SSHClient":
+    """Create and return a connected paramiko SSHClient."""
+    import paramiko
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    pkey = None
+    if key_text:
+        normalized = key_text.replace("\r\n", "\n").strip()
+        for key_class in (paramiko.RSAKey, paramiko.Ed25519Key):
+            try:
+                pkey = key_class.from_private_key(io.StringIO(normalized))
+                break
+            except (paramiko.SSHException, ValueError):
+                continue
+
+    connect_kwargs: dict = {
+        "hostname": host,
+        "port": port,
+        "username": user,
+        "timeout": timeout,
+    }
+    if password:
+        connect_kwargs["password"] = password
     if key_file:
-        return key_file
+        connect_kwargs["key_filename"] = key_file
+    if pkey:
+        connect_kwargs["pkey"] = pkey
 
-    key_text = config_str("ssh", "privateKey")
-    if not key_text:
-        return ""
-
-    SSH_KEY_DIR.mkdir(parents=True, exist_ok=True)
-    path = SSH_KEY_DIR / "default_ssh_key"
-    normalized = key_text.replace("\r\n", "\n").strip()
-    path.write_text(f"{normalized}\n", encoding="utf-8")
-    if os.name != "nt":
-        path.chmod(0o600)
-    return str(path)
-
-
-def _ssh_target(user: str, host: str) -> str:
-    return f"{user}@{host}" if user else host
-
-
-def _ssh_extra_args() -> list[str]:
-    raw = config_str("ssh", "extraArgs")
-    if not raw:
-        return []
-    return [part for part in raw.split() if part.strip()]
+    client.connect(**connect_kwargs)
+    return client
 
 
 def _parse_typeperf_cpu(stdout: str) -> float | None:
@@ -1209,7 +1207,7 @@ def run_ssh_command(
     key_file: str = "",
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
-    """Run a command on a remote host through the system ssh client.
+    """Run a command on a remote host through paramiko (pure-Python SSH).
 
     Args:
         command: Remote command text to execute.
@@ -1223,15 +1221,16 @@ def run_ssh_command(
         return "Error: command must not be empty."
 
     resolved_host = _ssh_config_value(host, "host")
-    resolved_user = _ssh_config_value(user, "user")
-    resolved_port = _ssh_port(port)
-    resolved_key = _materialized_ssh_key(key_file)
     if not resolved_host:
         return "Error: SSH host is required. Set it in configuration or pass host."
+    resolved_user = _ssh_config_value(user, "user", target_host=resolved_host)
+    resolved_port = _ssh_port(port, target_host=resolved_host)
 
-    ssh = shutil.which("ssh")
-    if not ssh:
-        return "Error: ssh client is not available on this machine."
+    # Resolve key: explicit keyFile path takes priority; otherwise use privateKey text.
+    resolved_key_file = _ssh_config_value(key_file, "keyFile", resolved_host)
+    resolved_key_text = ""
+    if not resolved_key_file:
+        resolved_key_text = _ssh_private_key_text(target_host=resolved_host)
 
     try:
         timeout = int(timeout_seconds)
@@ -1239,60 +1238,60 @@ def run_ssh_command(
         timeout = DEFAULT_TIMEOUT_SECONDS
     timeout = min(max(timeout, 1), MAX_TIMEOUT_SECONDS)
 
-    # 这里同时使用三层“关闭输入”的保护：
-    # 1. ssh -n：OpenSSH 客户端不从 stdin 读取数据，等价于把 stdin 重定向到空设备。
-    # 2. StdinNull=yes：用 ssh 配置项表达同样意图，避免 extraArgs 或平台差异让行为变含糊。
-    # 3. _run_ssh_process(stdin=DEVNULL)：Python 子进程层面也断开 stdin。
-    #
-    # BatchMode=yes 仍然保留，用来禁止密码、passphrase 等交互式提示；如果认证失败，
-    # ssh 会尽快返回错误，而不是在后台工具调用里静默等待。
-    argv = [
-        ssh,
-        "-n",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StdinNull=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-p",
-        str(resolved_port),
-    ]
-    if resolved_key:
-        argv.extend(["-i", resolved_key])
-    argv.extend(_ssh_extra_args())
-    argv.extend([_ssh_target(resolved_user, resolved_host), command])
-
-    try:
-        returncode, stdout, stderr, timed_out = _run_ssh_process(argv, timeout=timeout)
-    except OSError as exc:
-        return f"Error: failed to run ssh: {exc}"
+    resolved_password = _ssh_password(target_host=resolved_host)
 
     try:
         max_output_chars = int(os.getenv("SHELL_TOOL_MAX_OUTPUT_CHARS", DEFAULT_MAX_OUTPUT_CHARS))
     except ValueError:
         max_output_chars = DEFAULT_MAX_OUTPUT_CHARS
-    if timed_out:
+
+    try:
+        client = _paramiko_connect(
+            host=resolved_host,
+            port=resolved_port,
+            user=resolved_user or "root",
+            password=resolved_password,
+            key_file=resolved_key_file,
+            key_text=resolved_key_text,
+            timeout=timeout,
+        )
+    except (Exception, socket.error) as exc:
+        import paramiko
+        if isinstance(exc, paramiko.SSHException):
+            return f"Error: SSH connection failed: {exc}"
+        return f"Error: SSH connection failed: {exc}"
+
+    try:
+        stdin_chan, stdout_chan, stderr_chan = client.exec_command(command, timeout=timeout)
+        stdout_chan.channel.settimeout(timeout)
+        try:
+            stdout = stdout_chan.read().decode("utf-8", errors="replace")
+            stderr = stderr_chan.read().decode("utf-8", errors="replace")
+        except socket.timeout:
+            output = (
+                f"ssh_host: {resolved_host}\n"
+                f"ssh_user: {resolved_user or '(default)'}\n"
+                f"ssh_port: {resolved_port}\n"
+                f"timeout_seconds: {timeout}\n"
+                "status: timed out\n\n"
+                f"stdout:\n{stdout_chan.read().decode('utf-8', errors='replace') if stdout_chan.channel.recv_ready() else '(partial)'}\n\n"
+                f"stderr:\n{stderr_chan.read().decode('utf-8', errors='replace') if stderr_chan.channel.recv_stderr_ready() else '(partial)'}"
+            )
+            return _truncate(output, max(max_output_chars, 1000))
+
+        exit_status = stdout_chan.channel.recv_exit_status()
+
         output = (
             f"ssh_host: {resolved_host}\n"
             f"ssh_user: {resolved_user or '(default)'}\n"
             f"ssh_port: {resolved_port}\n"
-            f"timeout_seconds: {timeout}\n"
-            "status: timed out; process tree killed\n\n"
+            f"exit_code: {exit_status}\n\n"
             f"stdout:\n{stdout}\n\n"
             f"stderr:\n{stderr}"
         )
         return _truncate(output, max(max_output_chars, 1000))
-
-    output = (
-        f"ssh_host: {resolved_host}\n"
-        f"ssh_user: {resolved_user or '(default)'}\n"
-        f"ssh_port: {resolved_port}\n"
-        f"exit_code: {returncode}\n\n"
-        f"stdout:\n{stdout}\n\n"
-        f"stderr:\n{stderr}"
-    )
-    return _truncate(output, max(max_output_chars, 1000))
+    finally:
+        client.close()
 
 
 @tool
