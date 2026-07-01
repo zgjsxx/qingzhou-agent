@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -41,6 +41,46 @@ class AgentLarkTest(unittest.TestCase):
         self.assertEqual(event.chat_id, "oc_456")
         self.assertEqual(event.sender_id, "ou_123")
         self.assertEqual(event.text, "你好")
+
+    def test_parse_file_message_event(self):
+        data = {
+            "event": {
+                "message": {
+                    "message_id": "om_file",
+                    "chat_id": "oc_file",
+                    "message_type": "file",
+                    "content": json.dumps({"file_key": "file_abc", "file_name": "report.pdf"}),
+                },
+                "sender": {"sender_id": {"open_id": "ou_1"}},
+            }
+        }
+
+        event = agent_lark.parse_lark_message_event(data)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.file_key, "file_abc")
+        self.assertEqual(event.filename, "report.pdf")
+        self.assertEqual(event.message_type, "file")
+        self.assertEqual(event.text, "")
+
+    def test_parse_image_message_event(self):
+        data = {
+            "event": {
+                "message": {
+                    "message_id": "om_img",
+                    "chat_id": "oc_img",
+                    "message_type": "image",
+                    "content": json.dumps({"image_key": "img_xyz"}),
+                },
+                "sender": {"sender_id": {"open_id": "ou_1"}},
+            }
+        }
+
+        event = agent_lark.parse_lark_message_event(data)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.image_key, "img_xyz")
+        self.assertEqual(event.message_type, "image")
 
     def test_parse_post_message_event(self):
         content = {
@@ -97,80 +137,107 @@ class AgentLarkTest(unittest.TestCase):
         token_request.assert_called_once_with("app", "secret")
         self.assertEqual(post_json.call_count, 2)
 
-    def test_bridge_handle_event_invokes_graph_and_replies(self):
+    def test_bridge_handle_event_submits_to_buffer(self):
+        """handle_event should add event to the merge buffer, not process directly."""
         graph = SimpleNamespace()
-        graph.invoke = lambda *_args, **_kwargs: {
-            "messages": [SimpleNamespace(type="ai", content="收到")]
-        }
         bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
-        event = SimpleNamespace(
+        event_data = SimpleNamespace(
             event=SimpleNamespace(
                 sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_1")),
                 message=SimpleNamespace(
-                    message_id="om_bridge",
-                    chat_id="oc_bridge",
+                    message_id="om_buf",
+                    chat_id="oc_buf",
                     message_type="text",
                     content=json.dumps({"text": "ping"}),
                 ),
             )
         )
 
-        with patch("agent_lark.send_lark_text") as send_text:
-            bridge.handle_event(event)
-            bridge.executor.shutdown(wait=True)
+        with (
+            patch("agent_lark.add_lark_reaction", return_value="re_1"),
+            patch("agent_lark._remember_seen_message", return_value=True),
+        ):
+            bridge.handle_event(event_data)
 
-        send_text.assert_called_once()
-        self.assertEqual(send_text.call_args.args[:2], ("oc_bridge", "收到"))
+        # Event should be in the pending buffer
+        buf = agent_lark._pending_buffer
+        self.assertIn("oc_buf", buf._events)
 
-    def test_bridge_clear_command_reuses_thread_and_clears_history(self):
+    def test_process_merged_events_text_command(self):
+        """Slash commands in merged events should be handled."""
         calls = []
         graph = SimpleNamespace(
             update_state=lambda config, values: calls.append((config, values)),
-            invoke=lambda *_args, **_kwargs: self.fail("/clear must not invoke the model"),
+            invoke=lambda *_args, **_kwargs: self.fail("/clear must not invoke model"),
         )
         bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
-        thread_id = agent_lark._thread_id_for_chat("oc_clear")
-        agent_lark._store_thread_history(thread_id, [SimpleNamespace(type="human", content="old")])
-        event = SimpleNamespace(
-            event=SimpleNamespace(
-                sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_1")),
-                message=SimpleNamespace(
-                    message_id="om_clear",
-                    chat_id="oc_clear",
-                    message_type="text",
-                    content=json.dumps({"text": "/clear"}),
-                ),
-            )
-        )
+        events = [
+            agent_lark.LarkMessageEvent(
+                message_id="om_clear", chat_id="oc_clear", message_type="text",
+                text="/clear", sender_id="ou_1",
+            ),
+        ]
 
         with patch("agent_lark.send_lark_text") as send_text:
-            bridge.handle_event(event)
-            bridge.executor.shutdown(wait=True)
+            bridge._process_merged_events(events, ["re_1"])
 
-        self.assertEqual(calls[0][0], {"configurable": {"thread_id": thread_id}})
-        self.assertEqual(agent_lark._history_for_thread(thread_id), [])
+        send_text.assert_called()
         self.assertEqual(send_text.call_args.args[:2], ("oc_clear", CLEAR_RESPONSE))
 
-    def test_bridge_help_command_replies_without_invoking_graph(self):
-        graph = SimpleNamespace(invoke=lambda *_args, **_kwargs: self.fail("/help must not invoke the model"))
+    def test_process_merged_events_invokes_graph(self):
+        """Non-command text events should invoke the graph."""
+        graph = SimpleNamespace()
+        graph.invoke = lambda *_args, **_kwargs: {
+            "messages": [SimpleNamespace(type="ai", content="收到")]
+        }
         bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
-        event = SimpleNamespace(
-            event=SimpleNamespace(
-                sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_1")),
-                message=SimpleNamespace(
-                    message_id="om_help",
-                    chat_id="oc_help",
-                    message_type="text",
-                    content=json.dumps({"text": "/help"}),
-                ),
-            )
+        events = [
+            agent_lark.LarkMessageEvent(
+                message_id="om_run", chat_id="oc_run", message_type="text",
+                text="你好", sender_id="ou_1",
+            ),
+        ]
+
+        with (
+            patch("agent_lark.send_lark_text") as send_text,
+            patch("agent_lark._stream_channel_messages_enabled", return_value=False),
+        ):
+            bridge._process_merged_events(events, ["re_1"])
+
+        send_text.assert_called()
+        self.assertEqual(send_text.call_args.args[:2], ("oc_run", "收到"))
+
+    def test_process_merged_events_file_event(self):
+        """File events should download and produce text description."""
+        graph = SimpleNamespace()
+        graph.invoke = lambda *_args, **_kwargs: {
+            "messages": [SimpleNamespace(type="ai", content="文件分析完了")]
+        }
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        events = [
+            agent_lark.LarkMessageEvent(
+                message_id="om_file", chat_id="oc_file", message_type="file",
+                text="", file_key="file_abc", filename="report.pdf", sender_id="ou_1",
+            ),
+        ]
+
+        download_info = {"path": "/tmp/report.pdf", "filename": "report.pdf", "size": "128KB"}
+        with (
+            patch("agent_lark._download_lark_resource", return_value=download_info) as mock_download,
+            patch("agent_lark.send_lark_text") as send_text,
+            patch("agent_lark._stream_channel_messages_enabled", return_value=False),
+        ):
+            bridge._process_merged_events(events, ["re_1"])
+
+        send_text.assert_called()
+        mock_download.assert_called_once_with(
+            "om_file",
+            "file_abc",
+            "files",
+            preferred_filename="report.pdf",
+            app_id="app",
+            app_secret="secret",
         )
-
-        with patch("agent_lark.send_lark_text") as send_text:
-            bridge.handle_event(event)
-            bridge.executor.shutdown(wait=True)
-
-        self.assertEqual(send_text.call_args.args[:2], ("oc_help", HELP_RESPONSE))
 
     def test_add_lark_reaction_returns_reaction_id(self):
         with (
@@ -202,66 +269,51 @@ class AgentLarkTest(unittest.TestCase):
         self.assertIn("om_1/reactions/re_abc", call_url)
         self.assertEqual(mock_request.call_args.kwargs["method"], "DELETE")
 
-    def test_handle_event_adds_reaction_before_processing(self):
-        graph = SimpleNamespace()
-        graph.invoke = lambda *_args, **_kwargs: {
-            "messages": [SimpleNamespace(type="ai", content="ok")]
-        }
-        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
-        event = SimpleNamespace(
-            event=SimpleNamespace(
-                sender=SimpleNamespace(sender_id=SimpleNamespace(open_id="ou_1")),
-                message=SimpleNamespace(
-                    message_id="om_react",
-                    chat_id="oc_react",
-                    message_type="text",
-                    content=json.dumps({"text": "hello"}),
-                ),
+    def test_finish_reactions_preserves_message_mapping(self):
+        bridge = agent_lark.LarkWsBridge(
+            graph=SimpleNamespace(), app_id="app", app_secret="secret",
+        )
+        events = [
+            agent_lark.LarkMessageEvent(
+                message_id="om_1", chat_id="oc_1", message_type="text",
+                text="hi", sender_id="ou_1",
+            ),
+            agent_lark.LarkMessageEvent(
+                message_id="om_2", chat_id="oc_1", message_type="text",
+                text="there", sender_id="ou_1",
+            ),
+        ]
+        with patch("agent_lark.delete_lark_reaction") as del_reaction:
+            bridge._finish_reactions(events, ["re_1", "re_2"])
+            self.assertEqual(
+                del_reaction.call_args_list,
+                [
+                    unittest.mock.call("om_1", "re_1", app_id="app", app_secret="secret"),
+                    unittest.mock.call("om_2", "re_2", app_id="app", app_secret="secret"),
+                ],
             )
+
+    def test_late_reaction_waits_until_message_finishes(self):
+        bridge = agent_lark.LarkWsBridge(
+            graph=SimpleNamespace(), app_id="app", app_secret="secret",
         )
-
-        with (
-            patch("agent_lark.add_lark_reaction", return_value="re_1") as add_reaction,
-            patch("agent_lark.send_lark_text"),
-            patch("agent_lark.delete_lark_reaction") as del_reaction,
-        ):
-            bridge.handle_event(event)
-            bridge.executor.shutdown(wait=True)
-
-        add_reaction.assert_called_once_with("om_react", app_id="app", app_secret="secret")
-        del_reaction.assert_called_once_with("om_react", "re_1", app_id="app", app_secret="secret")
-
-    def test_process_event_removes_reaction_on_success(self):
-        graph = SimpleNamespace()
-        graph.invoke = lambda *_args, **_kwargs: {
-            "messages": [SimpleNamespace(type="ai", content="done")]
-        }
-        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
         event = agent_lark.LarkMessageEvent(
-            message_id="om_ok", chat_id="oc_ok", message_type="text", text="hi", sender_id="ou_1",
+            message_id="om_late", chat_id="oc_late", message_type="text",
+            text="hi", sender_id="ou_1",
         )
 
         with (
-            patch("agent_lark.send_lark_text"),
+            patch("agent_lark.add_lark_reaction", return_value="re_late"),
+            patch("agent_lark._pending_buffer.set_reaction", return_value=False),
             patch("agent_lark.delete_lark_reaction") as del_reaction,
         ):
-            bridge._process_event(event, "re_success")
-            del_reaction.assert_called_once_with("om_ok", "re_success", app_id="app", app_secret="secret")
+            bridge._add_reaction(event)
+            del_reaction.assert_not_called()
+            bridge._finish_reactions([event], [""])
 
-    def test_process_event_removes_reaction_on_failure(self):
-        graph = SimpleNamespace()
-        graph.invoke = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
-        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
-        event = agent_lark.LarkMessageEvent(
-            message_id="om_err", chat_id="oc_err", message_type="text", text="hi", sender_id="ou_1",
+        del_reaction.assert_called_once_with(
+            "om_late", "re_late", app_id="app", app_secret="secret",
         )
-
-        with (
-            patch("agent_lark.send_lark_text"),
-            patch("agent_lark.delete_lark_reaction") as del_reaction,
-        ):
-            bridge._process_event(event, "re_fail")
-            del_reaction.assert_called_once_with("om_err", "re_fail", app_id="app", app_secret="secret")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,8 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from agent_commands import handle_thread_slash_command
@@ -24,6 +25,8 @@ DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 12000
 DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 400
 LARK_ACK_EMOJI = os.getenv("LARK_ACK_EMOJI_TYPE", "OK")
+LARK_UPLOAD_DIR = Path(__file__).resolve().parents[1] / ".agent_uploads" / "lark"
+MERGE_WAIT_SECONDS = max(0.0, min(float(os.getenv("LARK_MERGE_WAIT_SECONDS", "10.0")), 10.0))
 
 _start_lock = threading.Lock()
 _started = False
@@ -45,6 +48,64 @@ class LarkMessageEvent:
     message_type: str
     text: str
     sender_id: str = ""
+    file_key: str = ""
+    image_key: str = ""
+    filename: str = ""
+
+
+class _PendingBuffer:
+    """Buffer for merging rapid-fire Lark messages from the same chat.
+
+    When a user sends file+text or multiple quick messages, Lark delivers
+    them as separate events. This buffer collects them within a configurable
+    time window before submitting a single merged prompt to the LLM.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._events: dict[str, list[LarkMessageEvent]] = {}
+        self._timers: dict[str, threading.Timer] = {}
+        self._reaction_ids: dict[str, list[str]] = {}
+
+    def add(self, event: LarkMessageEvent, reaction_id: str, on_flush: Any) -> None:
+        """Add event to buffer for its chat_id and reset the merge timer."""
+        chat_id = event.chat_id
+        with self._lock:
+            self._events.setdefault(chat_id, []).append(event)
+            self._reaction_ids.setdefault(chat_id, []).append(reaction_id)
+            # Cancel existing timer
+            old_timer = self._timers.pop(chat_id, None)
+            if old_timer is not None:
+                old_timer.cancel()
+            # Start new timer
+            wait = MERGE_WAIT_SECONDS if MERGE_WAIT_SECONDS > 0 else 0.05
+            timer = threading.Timer(wait, self._flush, args=[chat_id, on_flush])
+            timer.daemon = True
+            self._timers[chat_id] = timer
+            timer.start()
+
+    def set_reaction(self, chat_id: str, message_id: str, reaction_id: str) -> bool:
+        """Attach an asynchronously-created reaction to a buffered message."""
+        with self._lock:
+            events = self._events.get(chat_id, [])
+            reaction_ids = self._reaction_ids.get(chat_id, [])
+            for index, event in enumerate(events):
+                if event.message_id == message_id:
+                    reaction_ids[index] = reaction_id
+                    return True
+        return False
+
+    def _flush(self, chat_id: str, on_flush: Any) -> None:
+        """Timer expired — merge all buffered events and invoke callback."""
+        with self._lock:
+            events = self._events.pop(chat_id, [])
+            reaction_ids = self._reaction_ids.pop(chat_id, [])
+            self._timers.pop(chat_id, None)
+        if events:
+            on_flush(events, reaction_ids)
+
+
+_pending_buffer = _PendingBuffer()
 
 
 class DaemonWorkerPool:
@@ -88,6 +149,8 @@ class DaemonWorkerPool:
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
+
+
     value = os.getenv(name, "").strip().lower()
     if not value:
         return default
@@ -153,11 +216,21 @@ def parse_lark_message_event(data: Any) -> LarkMessageEvent | None:
     chat_id = str(_get_value(message, "chat_id") or "").strip()
     message_type = str(_get_value(message, "message_type") or "").strip()
     content = _get_value(message, "content")
+    content_data = _parse_json_object(content)
     text = _extract_text_content(message_type, content)
     sender_id = (
         str(_get_value(event, "sender", "sender_id", "open_id") or "").strip()
         or str(_get_value(event, "sender", "sender_id", "user_id") or "").strip()
     )
+
+    file_key = ""
+    image_key = ""
+    filename = ""
+    if message_type == "file":
+        file_key = str(content_data.get("file_key") or "").strip()
+        filename = str(content_data.get("file_name") or "").strip()
+    elif message_type == "image":
+        image_key = str(content_data.get("image_key") or "").strip()
 
     if not message_id or not chat_id:
         return None
@@ -167,6 +240,9 @@ def parse_lark_message_event(data: Any) -> LarkMessageEvent | None:
         message_type=message_type,
         text=text,
         sender_id=sender_id,
+        file_key=file_key,
+        image_key=image_key,
+        filename=filename,
     )
 
 
@@ -230,6 +306,45 @@ def _content_to_text(content: Any) -> str:
                 parts.append(item)
         return "".join(parts)
     return str(content or "")
+
+
+def _event_to_text_fragment(event: LarkMessageEvent, app_id: str, app_secret: str) -> str:
+    """Convert a single LarkMessageEvent into a text fragment for the merged prompt."""
+    if event.text:
+        return f"文本消息: {event.text}"
+
+    if event.message_type == "file" and event.file_key:
+        info = _download_lark_resource(
+            event.message_id,
+            event.file_key,
+            "files",
+            preferred_filename=event.filename,
+            app_id=app_id,
+            app_secret=app_secret,
+        )
+        if info.get("error"):
+            return f"文件消息: (下载失败: {info['error']})"
+        return (
+            f"文件消息:\n"
+            f"  filename: {info['filename']}\n"
+            f"  size: {info['size']}\n"
+            f"  path: {info['path']}\n"
+            f"  (文件已下载到本地，可以用 shell 工具或文件工具查看内容)"
+        )
+
+    if event.message_type == "image" and event.image_key:
+        info = _download_lark_resource(event.message_id, event.image_key, "images", app_id=app_id, app_secret=app_secret)
+        if info.get("error"):
+            return f"图片消息: (下载失败: {info['error']})"
+        return (
+            f"图片消息:\n"
+            f"  filename: {info['filename']}\n"
+            f"  size: {info['size']}\n"
+            f"  path: {info['path']}\n"
+            f"  (图片已下载到本地，可以用文件工具查看)"
+        )
+
+    return f"[{event.message_type}消息]"
 
 
 def extract_final_ai_text(result: Any) -> str:
@@ -363,6 +478,109 @@ def _post_lark_json(path: str, token: str, payload: dict[str, Any], query: dict[
     return _request_lark_json(path, token, payload, query=query)
 
 
+def _download_lark_resource(
+    message_id: str,
+    resource_key: str,
+    resource_type: str,
+    *,
+    preferred_filename: str = "",
+    app_id: str,
+    app_secret: str,
+) -> dict[str, str]:
+    """Download an image or file from Lark via the message resources API.
+
+    Uses /im/v1/messages/{message_id}/resources/{file_key}?type=...
+    which allows the bot to download resources sent by users (not just by the bot).
+
+    Returns dict with keys: path, filename, size (human-readable).
+    """
+    LARK_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    token = _get_tenant_access_token(app_id, app_secret)
+
+    # type 参数：file 消息用 "file"，image 消息用 "image"
+    resource_type_param = "file" if resource_type == "files" else "image"
+    api_path = f"/im/v1/messages/{message_id}/resources/{resource_key}"
+    query_string = f"?type={resource_type_param}"
+    url = f"{LARK_API_BASE_URL}{api_path}{query_string}"
+    request = urllib.request.Request(
+        url,
+        data=None,
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            content_disposition = response.headers.get("Content-Disposition", "")
+            # Extract filename from Content-Disposition.
+            # 飞书可能返回两种格式：
+            #   filename="report.pdf"              (ASCII)
+            #   filename*=UTF-8''%E6%8A%A5%E5%91%8A.pdf  (RFC 5987 中文)
+            # 消息事件中的 file_name 已由 SDK 按 JSON/UTF-8 正确解码，应优先使用。
+            # HTTP Content-Disposition 的普通 filename 可能被 urllib 按 Latin-1
+            # 解释，直接使用会把“设备参数表”保存成“è®¾å¤...”一类乱码。
+            remote_filename = preferred_filename.strip()
+            if not remote_filename and content_disposition:
+                # 优先尝试 RFC 5987 filename* (支持中文)
+                match_star = re.search(r'filename\*\s*=\s*UTF-8\'\'([^\s;]+)', content_disposition, re.IGNORECASE)
+                if match_star:
+                    remote_filename = urllib.parse.unquote(match_star.group(1))
+                else:
+                    # fallback: filename="xxx"
+                    match = re.search(r'filename\s*=\s*"([^"]+)"', content_disposition)
+                    if match:
+                        remote_filename = urllib.parse.unquote(match.group(1))
+
+            data = response.read()
+            size_bytes = len(data)
+
+            # Determine local filename — only strip chars unsafe for Windows filesystem
+            if remote_filename:
+                safe_name = re.sub(r'[<>:"/\\|?*]', '_', remote_filename)
+            else:
+                ext = ".png" if resource_type == "images" else ".bin"
+                safe_name = f"{resource_key}{ext}"
+
+            local_path = LARK_UPLOAD_DIR / safe_name
+            local_path.write_bytes(data)
+
+            # Human-readable size
+            if size_bytes >= 1024 * 1024:
+                size_str = f"{size_bytes / 1024 / 1024:.1f}MB"
+            elif size_bytes >= 1024:
+                size_str = f"{size_bytes / 1024:.0f}KB"
+            else:
+                size_str = f"{size_bytes}B"
+
+            return {
+                "path": str(local_path),
+                "filename": safe_name,
+                "size": size_str,
+            }
+    except urllib.error.HTTPError as exc:
+        # HTTPError 包含飞书返回的详细 JSON 错误信息
+        error_body = ""
+        try:
+            error_body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        log_event("lark.download_error", resource_type=resource_type, resource_key=resource_key, http_status=exc.code, error_body=error_body, error=repr(exc))
+        return {
+            "path": "",
+            "filename": "",
+            "size": "",
+            "error": f"HTTP {exc.code}: {error_body or repr(exc)}",
+        }
+    except Exception as exc:
+        log_event("lark.download_error", resource_type=resource_type, resource_key=resource_key, error=repr(exc))
+        return {
+            "path": "",
+            "filename": "",
+            "size": "",
+            "error": str(exc),
+        }
+
+
 def _reply_chunks(text: str) -> list[str]:
     limit = max(1000, _int_env("LARK_REPLY_MAX_CHARS", DEFAULT_REPLY_MAX_CHARS))
     if len(text) <= limit:
@@ -423,6 +641,10 @@ class LarkWsBridge:
         self.app_id = app_id
         self.app_secret = app_secret
         self.executor = DaemonWorkerPool(max_workers=2, thread_name_prefix="lark-agent")
+        self.reaction_executor = DaemonWorkerPool(max_workers=2, thread_name_prefix="lark-reaction")
+        self._reaction_lock = threading.Lock()
+        self._late_reactions: dict[str, str] = {}
+        self._completed_messages: dict[str, float] = {}
 
     def handle_event(self, data: Any) -> None:
         log_event("lark.event_received", raw=_safe_event_repr(data))
@@ -436,79 +658,89 @@ class LarkWsBridge:
             chat_id=event.chat_id,
             message_id=event.message_id,
             message_type=event.message_type,
-            text_preview=event.text[:200],
+            text_preview=event.text[:200] if event.text else "",
         )
         if not _remember_seen_message(event.message_id):
             log_event("lark.event_ignored", reason="duplicate", message_id=event.message_id)
             return
-        # Add ack reaction immediately (before worker pool processing)
-        reaction_id = ""
+        # 先进入合并缓冲区，再异步添加确认表情。飞书 reaction API 偶尔耗时数秒，
+        # 如果同步等待它返回，后续消息无法及时进入缓冲区，会错过合并窗口。
+        _pending_buffer.add(event, "", on_flush=self._flush_merged_events)
+        self.reaction_executor.submit(self._add_reaction, event)
+
+    def _add_reaction(self, event: LarkMessageEvent) -> None:
         try:
             reaction_id = add_lark_reaction(event.message_id, app_id=self.app_id, app_secret=self.app_secret)
             log_event("lark.reaction_added", message_id=event.message_id, reaction_id=reaction_id)
+            if not reaction_id or _pending_buffer.set_reaction(event.chat_id, event.message_id, reaction_id):
+                return
+
+            # reaction 返回时消息可能已经离开缓冲区，但 Agent 仍在处理中。
+            # 这种情况下先保存 reaction，等最终回复流程结束后再清理。
+            remove_now = False
+            with self._reaction_lock:
+                self._prune_completed_messages()
+                if event.message_id in self._completed_messages:
+                    remove_now = True
+                else:
+                    self._late_reactions[event.message_id] = reaction_id
+            if remove_now:
+                self._remove_reaction(event.message_id, reaction_id)
         except Exception as exc:
             log_event("lark.reaction_add_error", message_id=event.message_id, error=repr(exc))
-        self.executor.submit(self._process_event, event, reaction_id)
 
-    def _process_event(self, event: LarkMessageEvent, reaction_id: str = "") -> None:
-        with _run_lock_for_chat(event.chat_id):
-            self._process_event_locked(event, reaction_id)
+    def _flush_merged_events(self, events: list[LarkMessageEvent], reaction_ids: list[str]) -> None:
+        """Buffer timer expired — merge all events and submit to worker pool."""
+        self.executor.submit(self._process_merged_events, events, reaction_ids)
 
-    def _remove_reaction(self, event: LarkMessageEvent, reaction_id: str) -> None:
-        if not reaction_id:
-            return
-        try:
-            delete_lark_reaction(event.message_id, reaction_id, app_id=self.app_id, app_secret=self.app_secret)
-            log_event("lark.reaction_removed", message_id=event.message_id, reaction_id=reaction_id)
-        except Exception as exc:
-            log_event("lark.reaction_remove_error", message_id=event.message_id, reaction_id=reaction_id, error=repr(exc))
+    def _process_merged_events(self, events: list[LarkMessageEvent], reaction_ids: list[str]) -> None:
+        chat_id = events[0].chat_id
+        with _run_lock_for_chat(chat_id):
+            self._process_merged_events_locked(events, reaction_ids)
 
-    def _process_event_locked(self, event: LarkMessageEvent, reaction_id: str = "") -> None:
-        if not event.text:
-            log_event(
-                "lark.message_unsupported",
-                chat_id=event.chat_id,
-                message_id=event.message_id,
-                message_type=event.message_type,
-            )
-            send_lark_text(
-                event.chat_id,
-                "我目前只支持处理飞书文本消息。",
-                app_id=self.app_id,
-                app_secret=self.app_secret,
-            )
-            self._remove_reaction(event, reaction_id)
-            return
+    def _process_merged_events_locked(self, events: list[LarkMessageEvent], reaction_ids: list[str]) -> None:
+        chat_id = events[0].chat_id
+        sender_id = events[0].sender_id
 
-        thread_id = _thread_id_for_chat(event.chat_id)
-        command_result = handle_thread_slash_command(event.text, self.graph, thread_id, source="lark")
-        if command_result:
-            if command_result.clear_history:
-                _clear_thread_history(thread_id)
-            send_lark_text(
-                event.chat_id,
-                command_result.response,
-                app_id=self.app_id,
-                app_secret=self.app_secret,
-            )
-            self._remove_reaction(event, reaction_id)
-            return
+        # Build merged text content from all events
+        fragments: list[str] = []
+        for idx, event in enumerate(events):
+            fragment = _event_to_text_fragment(event, self.app_id, self.app_secret)
+            fragments.append(f"[{idx + 1}] {fragment}")
+
+        merged_text = "\n".join(fragments)
+
+        # Check for slash commands in the text portion
+        text_only = " ".join(e.text for e in events if e.text)
+        thread_id = _thread_id_for_chat(chat_id)
+        if text_only:
+            command_result = handle_thread_slash_command(text_only, self.graph, thread_id, source="lark")
+            if command_result:
+                if command_result.clear_history:
+                    _clear_thread_history(thread_id)
+                send_lark_text(
+                    chat_id,
+                    command_result.response,
+                    app_id=self.app_id,
+                    app_secret=self.app_secret,
+                )
+                self._finish_reactions(events, reaction_ids)
+                return
 
         user_content = (
             "[Feishu message]\n"
-            f"chat_id: {event.chat_id}\n"
-            f"sender_id: {event.sender_id}\n"
-            f"message_id: {event.message_id}\n\n"
-            f"{event.text}"
+            f"chat_id: {chat_id}\n"
+            f"sender_id: {sender_id}\n\n"
+            f"{merged_text}"
         )
-        log_event("lark.run_start", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
+        log_event("lark.run_start", chat_id=chat_id, message_ids=[e.message_id for e in events], thread_id=thread_id)
         try:
             if _stream_channel_messages_enabled():
                 previous_messages = _history_for_thread(thread_id)
                 input_payload = {"messages": [*previous_messages, {"role": "user", "content": user_content}]}
                 run_config = {
                     "configurable": {"thread_id": thread_id},
-                    "metadata": {"source": "lark", "lark_chat_id": event.chat_id},
+                    "metadata": {"source": "lark", "lark_chat_id": chat_id},
                     "tags": ["lark"],
                     "callbacks": [],
                 }
@@ -518,7 +750,7 @@ class LarkWsBridge:
                     config=run_config,
                     previous_messages=previous_messages,
                     on_text=lambda text: send_lark_text(
-                        event.chat_id,
+                        chat_id,
                         text,
                         app_id=self.app_id,
                         app_secret=self.app_secret,
@@ -527,8 +759,8 @@ class LarkWsBridge:
                 messages = result.get("messages", []) if isinstance(result, dict) else []
                 if messages:
                     _store_thread_history(thread_id, list(messages))
-                log_event("lark.run_end", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
-                self._remove_reaction(event, reaction_id)
+                log_event("lark.run_end", chat_id=chat_id, message_ids=[e.message_id for e in events], thread_id=thread_id)
+                self._finish_reactions(events, reaction_ids)
                 return
 
             previous_messages = _history_for_thread(thread_id)
@@ -536,7 +768,7 @@ class LarkWsBridge:
                 {"messages": [*previous_messages, {"role": "user", "content": user_content}]},
                 config={
                     "configurable": {"thread_id": thread_id},
-                    "metadata": {"source": "lark", "lark_chat_id": event.chat_id},
+                    "metadata": {"source": "lark", "lark_chat_id": chat_id},
                     "tags": ["lark"],
                     "callbacks": [],
                 },
@@ -545,21 +777,21 @@ class LarkWsBridge:
             if messages:
                 _store_thread_history(thread_id, list(messages))
             answer = extract_final_ai_text(result) or "我处理完了，但没有生成可发送的文本回复。"
-            send_lark_text(event.chat_id, answer, app_id=self.app_id, app_secret=self.app_secret)
-            log_event("lark.run_end", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
-            self._remove_reaction(event, reaction_id)
+            send_lark_text(chat_id, answer, app_id=self.app_id, app_secret=self.app_secret)
+            log_event("lark.run_end", chat_id=chat_id, message_ids=[e.message_id for e in events], thread_id=thread_id)
+            self._finish_reactions(events, reaction_ids)
         except Exception as exc:
             log_event(
                 "lark.run_error",
-                chat_id=event.chat_id,
-                message_id=event.message_id,
+                chat_id=chat_id,
+                message_ids=[e.message_id for e in events],
                 thread_id=thread_id,
                 error=repr(exc),
                 traceback=traceback.format_exc(),
             )
             try:
                 send_lark_text(
-                    event.chat_id,
+                    chat_id,
                     f"处理飞书消息时出错：{exc}",
                     app_id=self.app_id,
                     app_secret=self.app_secret,
@@ -567,11 +799,46 @@ class LarkWsBridge:
             except Exception as send_exc:
                 log_event(
                     "lark.reply_error",
-                    chat_id=event.chat_id,
+                    chat_id=chat_id,
                     error=repr(send_exc),
                     traceback=traceback.format_exc(),
                 )
-            self._remove_reaction(event, reaction_id)
+            self._finish_reactions(events, reaction_ids)
+
+    def _prune_completed_messages(self) -> None:
+        cutoff = time.monotonic() - 300
+        expired = [
+            message_id
+            for message_id, completed_at in self._completed_messages.items()
+            if completed_at < cutoff
+        ]
+        for message_id in expired:
+            self._completed_messages.pop(message_id, None)
+
+    def _finish_reactions(self, events: list[LarkMessageEvent], reaction_ids: list[str]) -> None:
+        reactions_to_remove: list[tuple[str, str]] = []
+        now = time.monotonic()
+        with self._reaction_lock:
+            self._prune_completed_messages()
+            for index, event in enumerate(events):
+                self._completed_messages[event.message_id] = now
+                buffered_reaction = reaction_ids[index] if index < len(reaction_ids) else ""
+                late_reaction = self._late_reactions.pop(event.message_id, "")
+                reaction_id = late_reaction or buffered_reaction
+                if reaction_id:
+                    reactions_to_remove.append((event.message_id, reaction_id))
+
+        for message_id, reaction_id in reactions_to_remove:
+            self._remove_reaction(message_id, reaction_id)
+
+    def _remove_reaction(self, message_id: str, reaction_id: str) -> None:
+        if not reaction_id:
+            return
+        try:
+            delete_lark_reaction(message_id, reaction_id, app_id=self.app_id, app_secret=self.app_secret)
+            log_event("lark.reaction_removed", message_id=message_id, reaction_id=reaction_id)
+        except Exception as exc:
+            log_event("lark.reaction_remove_error", message_id=message_id, reaction_id=reaction_id, error=repr(exc))
 
     def run_forever(self) -> None:
         try:
