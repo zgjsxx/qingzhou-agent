@@ -138,6 +138,30 @@ def _canonical_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]
             normalized["user"] = str(normalized.get("user", ""))
             normalized["port"] = normalized.get("port", None)
         normalized["timeout_seconds"] = normalized.get("timeout_seconds", 30)
+    elif tool_name == "ssh_upload_file":
+        # 上传文件当前默认不走审批规则，但如果后续给它加 ask 规则，
+        # 这里先把影响行为的关键参数纳入签名，避免审批缓存过粗。
+        normalized["local_path"] = str(normalized.get("local_path", "")).strip()
+        normalized["remote_path"] = str(normalized.get("remote_path", "")).strip()
+        normalized["cwd"] = str(normalized.get("cwd", ""))
+        normalized["host"] = str(normalized.get("host", ""))
+        normalized["user"] = str(normalized.get("user", ""))
+        normalized["port"] = normalized.get("port", None)
+        normalized["create_dirs"] = bool(normalized.get("create_dirs", True))
+        normalized["overwrite"] = bool(normalized.get("overwrite", True))
+        normalized["timeout_seconds"] = normalized.get("timeout_seconds", 30)
+    elif tool_name == "ssh_download_file":
+        # 下载文件会落盘到本地工作目录，签名里需要带上本地目标路径与覆盖策略，
+        # 这样未来如果加入审批或缓存复用，行为边界才是明确的。
+        normalized["remote_path"] = str(normalized.get("remote_path", "")).strip()
+        normalized["local_path"] = str(normalized.get("local_path", "")).strip()
+        normalized["cwd"] = str(normalized.get("cwd", ""))
+        normalized["host"] = str(normalized.get("host", ""))
+        normalized["user"] = str(normalized.get("user", ""))
+        normalized["port"] = normalized.get("port", None)
+        normalized["create_dirs"] = bool(normalized.get("create_dirs", True))
+        normalized["overwrite"] = bool(normalized.get("overwrite", True))
+        normalized["timeout_seconds"] = normalized.get("timeout_seconds", 30)
     return _normalize_json_value(normalized)
 
 

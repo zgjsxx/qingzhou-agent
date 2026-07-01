@@ -11,6 +11,7 @@ import time
 import glob as glob_module
 import json
 import io
+import posixpath
 import socket
 import threading
 from contextvars import ContextVar
@@ -588,6 +589,51 @@ def _ssh_private_key_text(target_host: str = "") -> str:
     return str(entry.get("privateKey", "") or "").strip()
 
 
+def _resolve_ssh_connection_options(
+    *,
+    host: str = "",
+    user: str = "",
+    port: int | None = None,
+    key_file: str = "",
+    password: str = "",
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> tuple[str, str, int, str, str, str, int]:
+    """统一解析 SSH 连接参数。
+
+    这里把 host/user/port/key/password/timeout 的解析收敛成一个入口，
+    这样命令执行、文件上传、后续可能的文件下载都能复用同一套规则，
+    避免不同 SSH 工具对同一份配置解释不一致。
+    """
+
+    resolved_host = _ssh_config_value(host, "host")
+    if not resolved_host:
+        raise ValueError("SSH host is required. Set it in configuration or pass host.")
+
+    resolved_user = _ssh_config_value(user, "user", target_host=resolved_host) or "root"
+    resolved_port = _ssh_port(port, target_host=resolved_host)
+
+    # keyFile 路径优先；如果没有，再尝试读取配置里的 privateKey 文本。
+    resolved_key_file = _ssh_config_value(key_file, "keyFile", resolved_host)
+    resolved_key_text = "" if resolved_key_file else _ssh_private_key_text(target_host=resolved_host)
+    resolved_password = _ssh_password(password, target_host=resolved_host)
+
+    try:
+        timeout = int(timeout_seconds)
+    except (TypeError, ValueError):
+        timeout = DEFAULT_TIMEOUT_SECONDS
+    timeout = min(max(timeout, 1), MAX_TIMEOUT_SECONDS)
+
+    return (
+        resolved_host,
+        resolved_user,
+        resolved_port,
+        resolved_key_file,
+        resolved_key_text,
+        resolved_password,
+        timeout,
+    )
+
+
 def _paramiko_connect(
     host: str,
     port: int,
@@ -628,6 +674,37 @@ def _paramiko_connect(
 
     client.connect(**connect_kwargs)
     return client
+
+
+def _ensure_remote_directory(
+    sftp: "paramiko.SFTPClient",
+    remote_dir: str,
+) -> None:
+    """递归创建远端目录。
+
+    SFTP 没有像 `mkdir -p` 那样的现成语义，所以这里按路径层级逐段检查。
+    远端统一按 POSIX 路径处理，避免在 Windows 后端上误用本地分隔符。
+    """
+
+    normalized = posixpath.normpath(str(remote_dir or "").strip())
+    if not normalized or normalized == ".":
+        return
+
+    parts = [part for part in normalized.split("/") if part and part != "."]
+    current = "/" if normalized.startswith("/") else ""
+    for part in parts:
+        current = posixpath.join(current, part) if current else part
+        try:
+            sftp.stat(current)
+        except OSError:
+            sftp.mkdir(current)
+
+
+def _local_output_path(local_path: str, cwd: str = "") -> Path:
+    """解析下载目标本地路径，并复用现有工作目录边界约束。"""
+
+    _, resolved_local_path = _resolve_safe_path(local_path, cwd)
+    return resolved_local_path
 
 
 def _parse_typeperf_cpu(stdout: str) -> float | None:
@@ -1205,6 +1282,7 @@ def run_ssh_command(
     user: str = "",
     port: int | None = None,
     key_file: str = "",
+    password: str = "",
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     """Run a command on a remote host through paramiko (pure-Python SSH).
@@ -1215,30 +1293,32 @@ def run_ssh_command(
         user: SSH username. Empty uses the saved SSH username from configuration.
         port: SSH port. Empty uses the saved SSH port from configuration.
         key_file: Private key file path. Empty uses configured keyFile or privateKey.
+        password: SSH password. Empty uses the saved SSH password from configuration.
         timeout_seconds: Command timeout in seconds, clamped to 1..120.
     """
     if not command or not command.strip():
         return "Error: command must not be empty."
 
-    resolved_host = _ssh_config_value(host, "host")
-    if not resolved_host:
-        return "Error: SSH host is required. Set it in configuration or pass host."
-    resolved_user = _ssh_config_value(user, "user", target_host=resolved_host)
-    resolved_port = _ssh_port(port, target_host=resolved_host)
-
-    # Resolve key: explicit keyFile path takes priority; otherwise use privateKey text.
-    resolved_key_file = _ssh_config_value(key_file, "keyFile", resolved_host)
-    resolved_key_text = ""
-    if not resolved_key_file:
-        resolved_key_text = _ssh_private_key_text(target_host=resolved_host)
-
     try:
-        timeout = int(timeout_seconds)
-    except (TypeError, ValueError):
-        timeout = DEFAULT_TIMEOUT_SECONDS
-    timeout = min(max(timeout, 1), MAX_TIMEOUT_SECONDS)
+        (
+            resolved_host,
+            resolved_user,
+            resolved_port,
+            resolved_key_file,
+            resolved_key_text,
+            resolved_password,
+            timeout,
+        ) = _resolve_ssh_connection_options(
+            host=host,
+            user=user,
+            port=port,
+            key_file=key_file,
+            password=password,
+            timeout_seconds=timeout_seconds,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
 
-    resolved_password = _ssh_password(target_host=resolved_host)
 
     try:
         max_output_chars = int(os.getenv("SHELL_TOOL_MAX_OUTPUT_CHARS", DEFAULT_MAX_OUTPUT_CHARS))
@@ -1249,7 +1329,7 @@ def run_ssh_command(
         client = _paramiko_connect(
             host=resolved_host,
             port=resolved_port,
-            user=resolved_user or "root",
+            user=resolved_user,
             password=resolved_password,
             key_file=resolved_key_file,
             key_text=resolved_key_text,
@@ -1290,6 +1370,252 @@ def run_ssh_command(
             f"stderr:\n{stderr}"
         )
         return _truncate(output, max(max_output_chars, 1000))
+    finally:
+        client.close()
+
+
+@tool
+def ssh_upload_file(
+    local_path: str,
+    remote_path: str,
+    cwd: str = "",
+    host: str = "",
+    user: str = "",
+    port: int | None = None,
+    key_file: str = "",
+    password: str = "",
+    create_dirs: bool = True,
+    overwrite: bool = True,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> str:
+    """Upload one local file to a remote host over the existing SSH/SFTP channel.
+
+    Args:
+        local_path: Local file path to upload. Relative paths are resolved under cwd.
+        remote_path: Remote destination path, for example /tmp/demo.txt.
+        cwd: Optional local working directory. Empty means the backend process working directory.
+        host: SSH host. Empty uses the saved SSH host from configuration.
+        user: SSH username. Empty uses the saved SSH username from configuration.
+        port: SSH port. Empty uses the saved SSH port from configuration.
+        key_file: Private key file path. Empty uses configured keyFile or privateKey.
+        password: SSH password. Empty uses the saved SSH password from configuration.
+        create_dirs: Whether to create remote parent directories automatically.
+        overwrite: Whether to overwrite the remote file if it already exists.
+        timeout_seconds: Connection and transfer timeout in seconds, clamped to 1..120.
+    """
+    if not local_path or not local_path.strip():
+        return "Error: local_path must not be empty."
+    if not remote_path or not remote_path.strip():
+        return "Error: remote_path must not be empty."
+
+    try:
+        _, resolved_local_path = _resolve_safe_path(local_path, cwd)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    if not resolved_local_path.exists():
+        return f"Error: local file does not exist: {resolved_local_path}"
+    if not resolved_local_path.is_file():
+        return f"Error: local path is not a file: {resolved_local_path}"
+
+    normalized_remote_path = posixpath.normpath(str(remote_path).strip())
+    remote_dir = posixpath.dirname(normalized_remote_path)
+
+    try:
+        (
+            resolved_host,
+            resolved_user,
+            resolved_port,
+            resolved_key_file,
+            resolved_key_text,
+            resolved_password,
+            timeout,
+        ) = _resolve_ssh_connection_options(
+            host=host,
+            user=user,
+            port=port,
+            key_file=key_file,
+            password=password,
+            timeout_seconds=timeout_seconds,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    try:
+        local_size = resolved_local_path.stat().st_size
+    except OSError as exc:
+        return f"Error: failed to stat local file: {exc}"
+
+    try:
+        client = _paramiko_connect(
+            host=resolved_host,
+            port=resolved_port,
+            user=resolved_user,
+            password=resolved_password,
+            key_file=resolved_key_file,
+            key_text=resolved_key_text,
+            timeout=timeout,
+        )
+    except (Exception, socket.error) as exc:
+        return f"Error: SSH connection failed: {exc}"
+
+    try:
+        sftp = client.open_sftp()
+        try:
+            # 先处理远端父目录，再决定是否允许覆盖；这样返回信息更稳定，也更接近日常使用预期。
+            if create_dirs and remote_dir not in {"", "."}:
+                _ensure_remote_directory(sftp, remote_dir)
+
+            if not overwrite:
+                try:
+                    sftp.stat(normalized_remote_path)
+                    return f"Error: remote file already exists: {normalized_remote_path}"
+                except OSError:
+                    pass
+
+            sftp.put(str(resolved_local_path), normalized_remote_path)
+            try:
+                remote_size = int(sftp.stat(normalized_remote_path).st_size)
+            except OSError:
+                remote_size = local_size
+
+            return (
+                "Uploaded file over SSH/SFTP.\n"
+                f"ssh_host: {resolved_host}\n"
+                f"ssh_user: {resolved_user}\n"
+                f"ssh_port: {resolved_port}\n"
+                f"local_path: {resolved_local_path}\n"
+                f"remote_path: {normalized_remote_path}\n"
+                f"local_size: {local_size}\n"
+                f"remote_size: {remote_size}\n"
+                f"create_dirs: {create_dirs}\n"
+                f"overwrite: {overwrite}"
+            )
+        finally:
+            sftp.close()
+    except OSError as exc:
+        return f"Error: SSH upload failed: {exc}"
+    finally:
+        client.close()
+
+
+@tool
+def ssh_download_file(
+    remote_path: str,
+    local_path: str,
+    cwd: str = "",
+    host: str = "",
+    user: str = "",
+    port: int | None = None,
+    key_file: str = "",
+    password: str = "",
+    create_dirs: bool = True,
+    overwrite: bool = True,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> str:
+    """Download one remote file to the local working directory over SSH/SFTP.
+
+    Args:
+        remote_path: Remote source path, for example /tmp/demo.txt.
+        local_path: Local destination path. Relative paths are resolved under cwd.
+        cwd: Optional local working directory. Empty means the backend process working directory.
+        host: SSH host. Empty uses the saved SSH host from configuration.
+        user: SSH username. Empty uses the saved SSH username from configuration.
+        port: SSH port. Empty uses the saved SSH port from configuration.
+        key_file: Private key file path. Empty uses configured keyFile or privateKey.
+        password: SSH password. Empty uses the saved SSH password from configuration.
+        create_dirs: Whether to create local parent directories automatically.
+        overwrite: Whether to overwrite the local file if it already exists.
+        timeout_seconds: Connection and transfer timeout in seconds, clamped to 1..120.
+    """
+    if not remote_path or not remote_path.strip():
+        return "Error: remote_path must not be empty."
+    if not local_path or not local_path.strip():
+        return "Error: local_path must not be empty."
+
+    normalized_remote_path = posixpath.normpath(str(remote_path).strip())
+
+    try:
+        resolved_local_path = _local_output_path(local_path, cwd)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    if resolved_local_path.exists() and not resolved_local_path.is_file():
+        return f"Error: local path is not a file: {resolved_local_path}"
+    if resolved_local_path.exists() and not overwrite:
+        return f"Error: local file already exists: {resolved_local_path}"
+
+    if create_dirs:
+        try:
+            resolved_local_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return f"Error: failed to create local parent directories: {exc}"
+    elif not resolved_local_path.parent.exists():
+        return f"Error: local parent directory does not exist: {resolved_local_path.parent}"
+
+    try:
+        (
+            resolved_host,
+            resolved_user,
+            resolved_port,
+            resolved_key_file,
+            resolved_key_text,
+            resolved_password,
+            timeout,
+        ) = _resolve_ssh_connection_options(
+            host=host,
+            user=user,
+            port=port,
+            key_file=key_file,
+            password=password,
+            timeout_seconds=timeout_seconds,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    try:
+        client = _paramiko_connect(
+            host=resolved_host,
+            port=resolved_port,
+            user=resolved_user,
+            password=resolved_password,
+            key_file=resolved_key_file,
+            key_text=resolved_key_text,
+            timeout=timeout,
+        )
+    except (Exception, socket.error) as exc:
+        return f"Error: SSH connection failed: {exc}"
+
+    try:
+        sftp = client.open_sftp()
+        try:
+            try:
+                remote_size = int(sftp.stat(normalized_remote_path).st_size)
+            except OSError as exc:
+                return f"Error: remote file does not exist or is inaccessible: {normalized_remote_path} ({exc})"
+
+            sftp.get(normalized_remote_path, str(resolved_local_path))
+            try:
+                local_size = resolved_local_path.stat().st_size
+            except OSError:
+                local_size = remote_size
+
+            return (
+                "Downloaded file over SSH/SFTP.\n"
+                f"ssh_host: {resolved_host}\n"
+                f"ssh_user: {resolved_user}\n"
+                f"ssh_port: {resolved_port}\n"
+                f"remote_path: {normalized_remote_path}\n"
+                f"local_path: {resolved_local_path}\n"
+                f"remote_size: {remote_size}\n"
+                f"local_size: {local_size}\n"
+                f"create_dirs: {create_dirs}\n"
+                f"overwrite: {overwrite}"
+            )
+        finally:
+            sftp.close()
+    except OSError as exc:
+        return f"Error: SSH download failed: {exc}"
     finally:
         client.close()
 
@@ -1433,6 +1759,8 @@ ALL_TOOLS = [
     glob_files,
     run_shell_command,
     run_ssh_command,
+    ssh_upload_file,
+    ssh_download_file,
     list_background_tasks,
     get_background_task,
     cancel_background_task,
