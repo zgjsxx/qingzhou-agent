@@ -22,6 +22,7 @@ from agent_logging import log_event
 LARK_API_BASE_URL = "https://open.feishu.cn/open-apis"
 DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 12000
+DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 400
 LARK_ACK_EMOJI = os.getenv("LARK_ACK_EMOJI_TYPE", "OK")
 
 _start_lock = threading.Lock()
@@ -243,6 +244,73 @@ def extract_final_ai_text(result: Any) -> str:
     return ""
 
 
+def _trim_preview(text: str, limit: int = DEFAULT_TOOL_RESULT_PREVIEW_CHARS) -> str:
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...[truncated {len(text) - limit} chars]"
+
+
+def _message_outbound_texts(message: Any) -> list[str]:
+    """Convert streamed LangChain messages into channel-friendly texts.
+
+    飞书通道只逐条转发 AI 的可见文本，不转发工具调用和工具结果。
+    这样用户能看到思考过程中的自然语言阶段性输出，但不会被底层工具噪音刷屏。
+    """
+    message_type = getattr(message, "type", "")
+    role = getattr(message, "role", "")
+    class_name = message.__class__.__name__
+    outputs: list[str] = []
+
+    if message_type == "ai" or role == "assistant" or class_name == "AIMessage":
+        text = _content_to_text(getattr(message, "content", ""))
+        if text.strip():
+            outputs.append(text.strip())
+        return outputs
+
+    return outputs
+
+
+def _message_key(message: Any, index: int) -> str:
+    message_id = getattr(message, "id", None)
+    if message_id:
+        return f"id:{message_id}"
+    message_type = getattr(message, "type", message.__class__.__name__)
+    content_preview = _trim_preview(_content_to_text(getattr(message, "content", "")), 120)
+    return f"{index}:{message_type}:{content_preview}"
+
+
+def _stream_channel_messages_enabled() -> bool:
+    return _bool_env("LARK_STREAM_ALL_MESSAGES", True)
+
+
+def _invoke_and_forward_messages(
+    graph: Any,
+    *,
+    input_payload: dict[str, Any],
+    config: dict[str, Any],
+    previous_messages: list[Any],
+    on_text: Any,
+) -> Any:
+    """Invoke the graph and forward each newly produced AI/tool message in order."""
+    sent_keys = {_message_key(message, index) for index, message in enumerate(previous_messages)}
+    final_state: Any = None
+
+    for state in graph.stream(input_payload, config=config, stream_mode="values"):
+        final_state = state
+        messages = state.get("messages", []) if isinstance(state, dict) else []
+        for index, message in enumerate(messages):
+            key = _message_key(message, index)
+            if key in sent_keys:
+                continue
+            sent_keys.add(key)
+            for text in _message_outbound_texts(message):
+                if text.strip():
+                    on_text(text.strip())
+
+    return final_state
+
+
 def _tenant_token_request(app_id: str, app_secret: str) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{LARK_API_BASE_URL}/auth/v3/tenant_access_token/internal",
@@ -435,6 +503,34 @@ class LarkWsBridge:
         )
         log_event("lark.run_start", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
         try:
+            if _stream_channel_messages_enabled():
+                previous_messages = _history_for_thread(thread_id)
+                input_payload = {"messages": [*previous_messages, {"role": "user", "content": user_content}]}
+                run_config = {
+                    "configurable": {"thread_id": thread_id},
+                    "metadata": {"source": "lark", "lark_chat_id": event.chat_id},
+                    "tags": ["lark"],
+                    "callbacks": [],
+                }
+                result = _invoke_and_forward_messages(
+                    self.graph,
+                    input_payload=input_payload,
+                    config=run_config,
+                    previous_messages=previous_messages,
+                    on_text=lambda text: send_lark_text(
+                        event.chat_id,
+                        text,
+                        app_id=self.app_id,
+                        app_secret=self.app_secret,
+                    ),
+                )
+                messages = result.get("messages", []) if isinstance(result, dict) else []
+                if messages:
+                    _store_thread_history(thread_id, list(messages))
+                log_event("lark.run_end", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
+                self._remove_reaction(event, reaction_id)
+                return
+
             previous_messages = _history_for_thread(thread_id)
             result = self.graph.invoke(
                 {"messages": [*previous_messages, {"role": "user", "content": user_content}]},

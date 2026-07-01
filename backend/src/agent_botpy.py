@@ -16,6 +16,7 @@ from agent_logging import log_event
 
 DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 1500
+DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 400
 
 _start_lock = threading.Lock()
 _started = False
@@ -103,6 +104,72 @@ def extract_final_ai_text(result: Any) -> str:
             if text.strip():
                 return text.strip()
     return ""
+
+
+def _trim_preview(text: str, limit: int = DEFAULT_TOOL_RESULT_PREVIEW_CHARS) -> str:
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...[truncated {len(text) - limit} chars]"
+
+
+def _message_outbound_texts(message: Any) -> list[str]:
+    """Convert streamed LangChain messages into QQ-friendly outbound texts.
+
+    QQ 通道只逐条转发 AI 的自然语言文本，不转发工具调用和工具结果。
+    """
+    message_type = getattr(message, "type", "")
+    role = getattr(message, "role", "")
+    class_name = message.__class__.__name__
+    outputs: list[str] = []
+
+    if message_type == "ai" or role == "assistant" or class_name == "AIMessage":
+        text = _content_to_text(getattr(message, "content", ""))
+        if text.strip():
+            outputs.append(text.strip())
+        return outputs
+
+    return outputs
+
+
+def _message_key(message: Any, index: int) -> str:
+    message_id = getattr(message, "id", None)
+    if message_id:
+        return f"id:{message_id}"
+    message_type = getattr(message, "type", message.__class__.__name__)
+    content_preview = _trim_preview(_content_to_text(getattr(message, "content", "")), 120)
+    return f"{index}:{message_type}:{content_preview}"
+
+
+def _stream_channel_messages_enabled() -> bool:
+    return _bool_env("BOTPY_STREAM_ALL_MESSAGES", True)
+
+
+def _invoke_and_collect_outbound_messages(
+    graph: Any,
+    *,
+    input_payload: dict[str, Any],
+    config: dict[str, Any],
+    previous_messages: list[Any],
+) -> tuple[Any, list[str]]:
+    """Invoke the graph in stream mode and collect new outbound texts in order."""
+    sent_keys = {_message_key(message, index) for index, message in enumerate(previous_messages)}
+    outbound_texts: list[str] = []
+    final_state: Any = None
+
+    for state in graph.stream(input_payload, config=config, stream_mode="values"):
+        final_state = state
+        messages = state.get("messages", []) if isinstance(state, dict) else []
+        for index, message in enumerate(messages):
+            key = _message_key(message, index)
+            if key in sent_keys:
+                continue
+            sent_keys.add(key)
+            for text in _message_outbound_texts(message):
+                if text.strip():
+                    outbound_texts.append(text.strip())
+
+    return final_state, outbound_texts
 
 
 def _clean_botpy_text(text: str) -> str:
@@ -207,6 +274,30 @@ class BotpyBridgeClient:
         )
         log_event("botpy.run_start", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
         try:
+            if _stream_channel_messages_enabled():
+                previous_messages = _history_for_thread(thread_id)
+                input_payload = {"messages": [*previous_messages, {"role": "user", "content": user_content}]}
+                run_config = {
+                    "configurable": {"thread_id": thread_id},
+                    "metadata": {"source": "botpy", "botpy_chat_id": event.chat_id},
+                    "tags": ["botpy"],
+                    "callbacks": [],
+                }
+                result, outbound_texts = await asyncio.to_thread(
+                    _invoke_and_collect_outbound_messages,
+                    self.graph,
+                    input_payload=input_payload,
+                    config=run_config,
+                    previous_messages=previous_messages,
+                )
+                messages = result.get("messages", []) if isinstance(result, dict) else []
+                if messages:
+                    _store_thread_history(thread_id, list(messages))
+                for text in outbound_texts:
+                    await reply_botpy_text(event.raw_message, text)
+                log_event("botpy.run_end", chat_id=event.chat_id, message_id=event.message_id, thread_id=thread_id)
+                return
+
             previous_messages = _history_for_thread(thread_id)
             result = await asyncio.to_thread(
                 self.graph.invoke,
