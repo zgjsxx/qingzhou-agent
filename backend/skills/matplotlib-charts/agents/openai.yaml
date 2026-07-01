@@ -1,0 +1,4 @@
+interface:
+  display_name: "Matplotlib 图表"
+  short_description: "使用 Matplotlib 生成柱状图、饼图和折线图"
+  default_prompt: "使用 $matplotlib-charts 根据给定数据生成一张清晰的图表。"
