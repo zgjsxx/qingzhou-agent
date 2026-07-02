@@ -107,3 +107,36 @@ LLM 和 SSH 配置也可通过前端配置面板管理。
 - **新增技能**：创建 `skills/<名称>/SKILL.md`（含 YAML frontmatter）
 - **新增 MCP 服务器**：在 `backend/.mcp.json` 中配置
 - **切换模型**：设置 `LLM_ADAPTER_TYPE`（anthropic/openai）和 `LLM_MODEL`
+
+# 可选 Playwright 浏览器工具
+
+后端可以按需向模型注入 Playwright 浏览器工具。该能力默认关闭，因此不会占用日常
+对话的工具上下文。
+
+在 `backend/.env` 中启用：
+
+```env
+AGENT_PLAYWRIGHT_ENABLED=true
+AGENT_PLAYWRIGHT_BROWSER=chromium
+# 可选：使用本机浏览器，填 chrome 或 msedge；留空则使用 Playwright 下载的 Chromium
+AGENT_PLAYWRIGHT_CHANNEL=
+AGENT_PLAYWRIGHT_AUTO_DETECT_CHANNEL=true
+AGENT_PLAYWRIGHT_HEADLESS=true
+AGENT_PLAYWRIGHT_TIMEOUT_MS=30000
+```
+
+首次使用前安装 Python 包和浏览器：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
+
+Windows 默认会在 channel 留空时依次探测系统 Edge 和 Chrome；也可以显式设置
+`AGENT_PLAYWRIGHT_CHANNEL=msedge` 或 `chrome`。使用系统浏览器时可以跳过浏览器下载命令。
+修改环境变量后需要重启后端。启用后会注入 `playwright_open`、
+`playwright_snapshot`、`playwright_click`、`playwright_type`、
+`playwright_press`、`playwright_scroll`、`playwright_screenshot` 和
+`playwright_close`。浏览器会话按 LangGraph thread 隔离，截图只能写入
+`backend/` 工作目录内。导航和交互操作会经过权限审批。

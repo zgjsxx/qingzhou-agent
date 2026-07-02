@@ -51,6 +51,12 @@ SHELL_ASK_PATTERNS = [
 ]
 
 WRITE_TOOLS = {"write_file", "edit_file"}
+PLAYWRIGHT_ASK_TOOLS = {
+    "playwright_open",
+    "playwright_click",
+    "playwright_type",
+    "playwright_press",
+}
 APPROVED_TOOL_CALLS: dict[str, set[str]] = {}
 APPROVED_TOOL_CALLS_LOCK = threading.Lock()
 DEFAULT_WORKDIR = Path(__file__).parent.parent
@@ -208,6 +214,12 @@ def _check_permission_rules(tool_name: str, args: dict[str, Any]) -> PermissionD
 
     if tool_name == "rag_rebuild_index":
         return PermissionDecision("ask", "Rebuilding the RAG index writes local index storage.")
+
+    if tool_name in PLAYWRIGHT_ASK_TOOLS:
+        return PermissionDecision(
+            "ask",
+            "Browser navigation or interaction requires approval before execution.",
+        )
 
     if tool_name in WRITE_TOOLS and _path_escapes_root(
         str(args.get("path", "")),

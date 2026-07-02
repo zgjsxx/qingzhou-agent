@@ -56,6 +56,13 @@ THREAD_TODOS: dict[str, list[dict[str, str]]] = {}
 THREAD_TODOS_LOCK = threading.Lock()
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def set_current_tool_thread_id(thread_id: str | None):
     """Set the current tool thread id for tools that keep per-thread state."""
     return CURRENT_TOOL_THREAD_ID.set(thread_id or DEFAULT_TODO_THREAD_ID)
@@ -1765,3 +1772,9 @@ ALL_TOOLS = [
     get_background_task,
     cancel_background_task,
 ]
+
+if _bool_env("AGENT_PLAYWRIGHT_ENABLED"):
+    from playwright_tools import PLAYWRIGHT_TOOLS, set_thread_id_getter
+
+    set_thread_id_getter(lambda: CURRENT_TOOL_THREAD_ID.get())
+    ALL_TOOLS.extend(PLAYWRIGHT_TOOLS)
