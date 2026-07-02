@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Plus,
   Plug,
+  Save,
   Settings,
   Sparkles,
   Trash2,
@@ -41,6 +42,18 @@ type Plugin = {
   enabled: boolean;
   configured: boolean;
   headerKeys: string[];
+  credentialConfigured: boolean;
+  defaultParameters: {
+    maxResults: number;
+    searchDepth: "basic" | "advanced";
+  } | null;
+};
+
+type TavilyConfig = {
+  apiKey: string;
+  enabled: boolean;
+  maxResults: number;
+  searchDepth: "basic" | "advanced";
 };
 
 type SshHost = {
@@ -124,7 +137,11 @@ export function LocalPanels() {
     }));
   };
 
-  const updateSshHost = (index: number, key: keyof SshHost, value: string | number) => {
+  const updateSshHost = (
+    index: number,
+    key: keyof SshHost,
+    value: string | number,
+  ) => {
     setConfig((current) => {
       const hosts = [...current.ssh];
       hosts[index] = { ...hosts[index], [key]: value };
@@ -197,6 +214,36 @@ export function LocalPanels() {
       toast.error("Failed to update plugin", {
         description: error instanceof Error ? error.message : "Unknown error",
       });
+    } finally {
+      setPluginSavingName(null);
+    }
+  };
+
+  const configureTavily = async (settings: TavilyConfig) => {
+    setPluginSavingName("tavily");
+    try {
+      const res = await fetch("/api/local/plugins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "configure",
+          name: "tavily",
+          ...settings,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      await loadPlugins();
+      toast.success("Tavily Web Search saved", {
+        description: "Restart the backend to load the Tavily MCP tools.",
+      });
+    } catch (error) {
+      toast.error("Failed to save Tavily", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+      throw error;
     } finally {
       setPluginSavingName(null);
     }
@@ -290,6 +337,7 @@ export function LocalPanels() {
                   plugins={plugins}
                   pluginSavingName={pluginSavingName}
                   onToggle={togglePlugin}
+                  onConfigureTavily={configureTavily}
                 />
               ) : (
                 <ConfigPage
@@ -348,8 +396,9 @@ function PluginsPage(props: {
   plugins: Plugin[];
   pluginSavingName: string | null;
   onToggle: (name: string, enabled: boolean) => void;
+  onConfigureTavily: (settings: TavilyConfig) => Promise<void>;
 }) {
-  const { plugins, pluginSavingName, onToggle } = props;
+  const { plugins, pluginSavingName, onToggle, onConfigureTavily } = props;
 
   if (plugins.length === 0) {
     return (
@@ -378,70 +427,200 @@ function PluginsPage(props: {
       </Card>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {plugins.map((plugin) => (
-          <Card
-            key={`${plugin.name}-${plugin.url}`}
-            className="gap-4 rounded-lg"
-          >
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <CardTitle className="text-base">{plugin.name}</CardTitle>
-                  <CardDescription>
-                    {plugin.configured ? "Configured" : "Example"} ·{" "}
-                    {plugin.enabled ? "Enabled" : "Disabled"}
-                  </CardDescription>
+        {plugins.map((plugin) =>
+          plugin.name === "tavily" ? (
+            <TavilyPluginCard
+              key="tavily"
+              plugin={plugin}
+              saving={pluginSavingName === "tavily"}
+              onSave={onConfigureTavily}
+            />
+          ) : (
+            <Card
+              key={`${plugin.name}-${plugin.url}`}
+              className="gap-4 rounded-lg"
+            >
+              <CardHeader>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <CardTitle className="text-base">{plugin.name}</CardTitle>
+                    <CardDescription>
+                      {plugin.configured ? "Configured" : "Example"} ·{" "}
+                      {plugin.enabled ? "Enabled" : "Disabled"}
+                    </CardDescription>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    {plugin.configured ? (
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={plugin.enabled}
+                          disabled={pluginSavingName === plugin.name}
+                          onCheckedChange={(checked) =>
+                            onToggle(plugin.name, checked)
+                          }
+                          aria-label={`Toggle ${plugin.name}`}
+                        />
+                        <span className="text-muted-foreground text-xs">
+                          {pluginSavingName === plugin.name ? "Saving..." : ""}
+                        </span>
+                      </div>
+                    ) : null}
+                    <span className="bg-muted rounded-md px-2 py-1 text-xs font-medium uppercase">
+                      {plugin.type}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-3">
-                  {plugin.configured ? (
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={plugin.enabled}
-                        disabled={pluginSavingName === plugin.name}
-                        onCheckedChange={(checked) =>
-                          onToggle(plugin.name, checked)
-                        }
-                        aria-label={`Toggle ${plugin.name}`}
-                      />
-                      <span className="text-xs text-muted-foreground">
-                        {pluginSavingName === plugin.name ? "Saving..." : ""}
-                      </span>
-                    </div>
-                  ) : null}
-                  <span className="bg-muted rounded-md px-2 py-1 text-xs font-medium uppercase">
-                    {plugin.type}
-                  </span>
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                <div>
+                  <p className="text-muted-foreground text-xs font-medium">
+                    URL
+                  </p>
+                  <p className="font-mono text-xs leading-5 break-all">
+                    {plugin.url || "(not set)"}
+                  </p>
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <div>
-                <p className="text-muted-foreground text-xs font-medium">URL</p>
-                <p className="font-mono text-xs leading-5 break-all">
-                  {plugin.url || "(not set)"}
-                </p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs font-medium">
-                  Headers
-                </p>
-                <p className="text-sm leading-6">
-                  {plugin.headerKeys.length > 0
-                    ? plugin.headerKeys.join(", ")
-                    : "(none)"}
-                </p>
-              </div>
-              {!plugin.configured ? (
-                <p className="text-muted-foreground text-xs leading-5">
-                  Example plugins are read-only. Add them to{" "}
-                  <code>backend/.mcp.json</code> before toggling them here.
-                </p>
-              ) : null}
-            </CardContent>
-          </Card>
-        ))}
+                <div>
+                  <p className="text-muted-foreground text-xs font-medium">
+                    Headers
+                  </p>
+                  <p className="text-sm leading-6">
+                    {plugin.headerKeys.length > 0
+                      ? plugin.headerKeys.join(", ")
+                      : "(none)"}
+                  </p>
+                </div>
+                {!plugin.configured ? (
+                  <p className="text-muted-foreground text-xs leading-5">
+                    Example plugins are read-only. Add them to{" "}
+                    <code>backend/.mcp.json</code> before toggling them here.
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+          ),
+        )}
       </div>
     </div>
+  );
+}
+
+function TavilyPluginCard(props: {
+  plugin: Plugin;
+  saving: boolean;
+  onSave: (settings: TavilyConfig) => Promise<void>;
+}) {
+  const { plugin, saving, onSave } = props;
+  const [apiKey, setApiKey] = useState("");
+  const [enabled, setEnabled] = useState(
+    plugin.configured ? plugin.enabled : true,
+  );
+  const [maxResults, setMaxResults] = useState(
+    plugin.defaultParameters?.maxResults ?? 8,
+  );
+  const [searchDepth, setSearchDepth] = useState<"basic" | "advanced">(
+    plugin.defaultParameters?.searchDepth ?? "basic",
+  );
+
+  useEffect(() => {
+    setEnabled(plugin.configured ? plugin.enabled : true);
+    setMaxResults(plugin.defaultParameters?.maxResults ?? 8);
+    setSearchDepth(plugin.defaultParameters?.searchDepth ?? "basic");
+    setApiKey("");
+  }, [plugin]);
+
+  return (
+    <Card className="gap-4 rounded-lg md:col-span-2">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="text-base">Tavily Web Search</CardTitle>
+            <CardDescription>
+              Search, extract, map, and crawl the live web through MCP.
+            </CardDescription>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Switch
+              checked={enabled}
+              disabled={saving}
+              onCheckedChange={setEnabled}
+              aria-label="Enable Tavily Web Search"
+            />
+            <span className="text-xs">{enabled ? "Enabled" : "Disabled"}</span>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-5 sm:grid-cols-2">
+        <div className="grid gap-2 sm:col-span-2">
+          <Label htmlFor="tavily-api-key">API Key</Label>
+          <Input
+            id="tavily-api-key"
+            type="password"
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+            placeholder={
+              plugin.credentialConfigured
+                ? "Configured; leave blank to keep the current key"
+                : "tvly-..."
+            }
+            autoComplete="off"
+          />
+          <p className="text-muted-foreground text-xs">
+            Stored only in <code>backend/.mcp.json</code> and never returned by
+            the configuration API.
+          </p>
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="tavily-max-results">Default results</Label>
+          <Input
+            id="tavily-max-results"
+            type="number"
+            min={1}
+            max={20}
+            value={maxResults}
+            onChange={(event) => setMaxResults(Number(event.target.value))}
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label>Search depth</Label>
+          <div className="bg-muted grid grid-cols-2 gap-1 rounded-md p-1">
+            {(["basic", "advanced"] as const).map((depth) => (
+              <Button
+                key={depth}
+                type="button"
+                size="sm"
+                variant={searchDepth === depth ? "secondary" : "ghost"}
+                onClick={() => setSearchDepth(depth)}
+                disabled={saving}
+                className="capitalize"
+              >
+                {depth}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t pt-4 sm:col-span-2">
+          <p className="text-muted-foreground text-xs">
+            Changes take effect after the backend restarts.
+          </p>
+          <Button
+            type="button"
+            disabled={saving || maxResults < 1 || maxResults > 20}
+            onClick={() =>
+              onSave({ apiKey, enabled, maxResults, searchDepth }).catch(
+                () => undefined,
+              )
+            }
+          >
+            <Save className="size-4" />
+            {saving ? "Saving..." : "Save"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -454,7 +633,11 @@ function ConfigPage(props: {
     key: string,
     value: string | number,
   ) => void;
-  onUpdateSshHost: (index: number, key: keyof SshHost, value: string | number) => void;
+  onUpdateSshHost: (
+    index: number,
+    key: keyof SshHost,
+    value: string | number,
+  ) => void;
   onAddSshHost: () => void;
   onRemoveSshHost: (index: number) => void;
 }) {
@@ -480,7 +663,10 @@ function ConfigPage(props: {
     {
       key: "llm" as const,
       label: "LLM",
-      summary: props.config.llm.model || props.config.llm.adapterType || "Not configured",
+      summary:
+        props.config.llm.model ||
+        props.config.llm.adapterType ||
+        "Not configured",
       count: null,
     },
     {
@@ -529,7 +715,9 @@ function ConfigPage(props: {
                         {item.count}
                       </span>
                     ) : null}
-                    <ChevronRight className={`size-4 ${active ? "opacity-100" : "opacity-50"}`} />
+                    <ChevronRight
+                      className={`size-4 ${active ? "opacity-100" : "opacity-50"}`}
+                    />
                   </div>
                 </button>
               );
@@ -543,15 +731,17 @@ function ConfigPage(props: {
               <CardHeader>
                 <CardTitle>LLM</CardTitle>
                 <CardDescription>
-                  Environment variables still take precedence. Restart the backend
-                  after changing these values.
+                  Environment variables still take precedence. Restart the
+                  backend after changing these values.
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid max-w-2xl gap-4">
                 <LabeledInput
                   label="Adapter"
                   value={props.config.llm.adapterType}
-                  onChange={(value) => props.onChange("llm", "adapterType", value)}
+                  onChange={(value) =>
+                    props.onChange("llm", "adapterType", value)
+                  }
                 />
                 <LabeledInput
                   label="Model"
@@ -576,8 +766,8 @@ function ConfigPage(props: {
               <CardHeader>
                 <CardTitle>SSH Hosts</CardTitle>
                 <CardDescription>
-                  Configure one or more SSH hosts. The agent auto-selects by host
-                  matching; the first entry is the default.
+                  Configure one or more SSH hosts. The agent auto-selects by
+                  host matching; the first entry is the default.
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid min-w-0 gap-5 2xl:grid-cols-[240px_minmax(0,1fr)]">
@@ -585,7 +775,8 @@ function ConfigPage(props: {
                   <div className="space-y-1">
                     <div className="text-sm font-medium">Host list</div>
                     <div className="text-muted-foreground text-xs leading-5">
-                      Pick a host on the left, then edit its details on the right.
+                      Pick a host on the left, then edit its details on the
+                      right.
                     </div>
                   </div>
 
@@ -620,9 +811,15 @@ function ConfigPage(props: {
                             ) : null}
                           </div>
                           <div className="text-muted-foreground mt-2 flex flex-wrap gap-2 text-[11px]">
-                            <span>{ssh.keyFile || ssh.privateKey ? "Key" : "No key"}</span>
-                            <span>{ssh.password ? "Password" : "No password"}</span>
-                            <span>{ssh.extraArgs ? "Extra args" : "Standard"}</span>
+                            <span>
+                              {ssh.keyFile || ssh.privateKey ? "Key" : "No key"}
+                            </span>
+                            <span>
+                              {ssh.password ? "Password" : "No password"}
+                            </span>
+                            <span>
+                              {ssh.extraArgs ? "Extra args" : "Standard"}
+                            </span>
                           </div>
                         </button>
                       );
@@ -652,17 +849,21 @@ function ConfigPage(props: {
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <div className="text-base font-semibold">
-                            {selectedSsh.host || `未命名主机 ${selectedSshIndex + 1}`}
+                            {selectedSsh.host ||
+                              `未命名主机 ${selectedSshIndex + 1}`}
                           </div>
                           <div className="text-muted-foreground text-sm">
-                            Edit connection, authentication, and advanced options.
+                            Edit connection, authentication, and advanced
+                            options.
                           </div>
                         </div>
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="gap-2 text-destructive hover:text-destructive"
-                          onClick={() => props.onRemoveSshHost(selectedSshIndex)}
+                          className="text-destructive hover:text-destructive gap-2"
+                          onClick={() =>
+                            props.onRemoveSshHost(selectedSshIndex)
+                          }
                           disabled={props.config.ssh.length <= 1}
                         >
                           <Trash2 className="size-4" />
@@ -677,7 +878,11 @@ function ConfigPage(props: {
                             label="Host"
                             value={selectedSsh.host}
                             onChange={(value) =>
-                              props.onUpdateSshHost(selectedSshIndex, "host", value)
+                              props.onUpdateSshHost(
+                                selectedSshIndex,
+                                "host",
+                                value,
+                              )
                             }
                           />
                           <LabeledInput
@@ -697,22 +902,36 @@ function ConfigPage(props: {
                           label="User"
                           value={selectedSsh.user}
                           onChange={(value) =>
-                            props.onUpdateSshHost(selectedSshIndex, "user", value)
+                            props.onUpdateSshHost(
+                              selectedSshIndex,
+                              "user",
+                              value,
+                            )
                           }
                         />
                       </section>
 
                       <section className="grid gap-4">
-                        <div className="text-sm font-medium">Authentication</div>
+                        <div className="text-sm font-medium">
+                          Authentication
+                        </div>
                         <LabeledInput
                           label="Key File"
                           value={selectedSsh.keyFile}
                           onChange={(value) =>
-                            props.onUpdateSshHost(selectedSshIndex, "keyFile", value)
+                            props.onUpdateSshHost(
+                              selectedSshIndex,
+                              "keyFile",
+                              value,
+                            )
                           }
                         />
                         <div className="flex flex-col gap-2">
-                          <Label htmlFor={`ssh-private-key-${selectedSshIndex}`}>Private Key</Label>
+                          <Label
+                            htmlFor={`ssh-private-key-${selectedSshIndex}`}
+                          >
+                            Private Key
+                          </Label>
                           <Textarea
                             id={`ssh-private-key-${selectedSshIndex}`}
                             value={selectedSsh.privateKey}
@@ -732,7 +951,11 @@ function ConfigPage(props: {
                           type="password"
                           value={selectedSsh.password}
                           onChange={(value) =>
-                            props.onUpdateSshHost(selectedSshIndex, "password", value)
+                            props.onUpdateSshHost(
+                              selectedSshIndex,
+                              "password",
+                              value,
+                            )
                           }
                         />
                       </section>
@@ -743,7 +966,11 @@ function ConfigPage(props: {
                           label="Extra Args"
                           value={selectedSsh.extraArgs}
                           onChange={(value) =>
-                            props.onUpdateSshHost(selectedSshIndex, "extraArgs", value)
+                            props.onUpdateSshHost(
+                              selectedSshIndex,
+                              "extraArgs",
+                              value,
+                            )
                           }
                         />
                       </section>
@@ -778,7 +1005,7 @@ function mergeConfig(data: Partial<AgentConfig>): AgentConfig {
   const sshRaw = data.ssh ?? [];
   const ssh: SshHost[] = Array.isArray(sshRaw)
     ? sshRaw.map((h) => ({ ...emptyHost, ...h }))
-    : [{ ...emptyHost, ...sshRaw as unknown as SshHost }];
+    : [{ ...emptyHost, ...(sshRaw as unknown as SshHost) }];
   return {
     llm: { ...emptyConfig.llm, ...(data.llm ?? {}) },
     ssh,

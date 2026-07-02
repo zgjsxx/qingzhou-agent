@@ -6,6 +6,15 @@
       "headers": {
         "Authorization": "Bearer ${GITHUB_PAT}"
       }
+    },
+    "tavily": {
+      "enabled": false,
+      "type": "http",
+      "url": "https://mcp.tavily.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${TAVILY_API_KEY}",
+        "DEFAULT_PARAMETERS": "{\"max_results\": 8, \"search_depth\": \"basic\"}"
+      }
     }
   }
 }
