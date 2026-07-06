@@ -74,6 +74,9 @@ type AgentConfig = {
     baseUrl: string;
   };
   ssh: SshHost[];
+  weixin: {
+    enabled: boolean;
+  };
 };
 
 const emptyHost: SshHost = {
@@ -89,6 +92,7 @@ const emptyHost: SshHost = {
 const emptyConfig: AgentConfig = {
   llm: { adapterType: "anthropic", model: "glm-5.1", apiKey: "", baseUrl: "" },
   ssh: [],
+  weixin: { enabled: false },
 };
 
 export function LocalPanels() {
@@ -126,7 +130,7 @@ export function LocalPanels() {
   const updateConfig = (
     section: keyof AgentConfig,
     key: string,
-    value: string | number,
+    value: string | number | boolean,
   ) => {
     setConfig((current) => ({
       ...current,
@@ -631,7 +635,7 @@ function ConfigPage(props: {
   onChange: (
     section: keyof AgentConfig,
     key: string,
-    value: string | number,
+    value: string | number | boolean,
   ) => void;
   onUpdateSshHost: (
     index: number,
@@ -641,7 +645,9 @@ function ConfigPage(props: {
   onAddSshHost: () => void;
   onRemoveSshHost: (index: number) => void;
 }) {
-  const [activeSection, setActiveSection] = useState<"llm" | "ssh">("llm");
+  const [activeSection, setActiveSection] = useState<
+    "llm" | "ssh" | "weixin"
+  >("llm");
   const [selectedSshIndex, setSelectedSshIndex] = useState(0);
 
   useEffect(() => {
@@ -677,6 +683,12 @@ function ConfigPage(props: {
           ? `${props.config.ssh.length} host${props.config.ssh.length > 1 ? "s" : ""}`
           : "No hosts",
       count: props.config.ssh.length,
+    },
+    {
+      key: "weixin" as const,
+      label: "Weixin",
+      summary: props.config.weixin.enabled ? "Enabled" : "Disabled",
+      count: null,
     },
   ];
 
@@ -761,7 +773,7 @@ function ConfigPage(props: {
                 />
               </CardContent>
             </Card>
-          ) : (
+          ) : activeSection === "ssh" ? (
             <Card className="rounded-lg">
               <CardHeader>
                 <CardTitle>SSH Hosts</CardTitle>
@@ -983,6 +995,35 @@ function ConfigPage(props: {
                 </div>
               </CardContent>
             </Card>
+          ) : (
+            <Card className="overflow-hidden rounded-lg">
+              <CardHeader>
+                <CardTitle>Weixin iLink</CardTitle>
+                <CardDescription>
+                  Personal WeChat direct messages through an iLink bot account.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid max-w-2xl gap-5">
+                <div className="flex items-center justify-between gap-4 rounded-md border p-4">
+                  <div>
+                    <Label htmlFor="weixin-enabled">Enable Weixin bridge</Label>
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      The backend loads saved QR-login credentials after restart.
+                    </p>
+                  </div>
+                  <Switch
+                    id="weixin-enabled"
+                    checked={props.config.weixin.enabled}
+                    onCheckedChange={(checked) =>
+                      props.onChange("weixin", "enabled", checked)
+                    }
+                  />
+                </div>
+                <div className="bg-muted/40 rounded-md border px-4 py-3 font-mono text-xs">
+                  python scripts/weixin_login.py
+                </div>
+              </CardContent>
+            </Card>
           )}
         </div>
       </div>
@@ -1009,6 +1050,7 @@ function mergeConfig(data: Partial<AgentConfig>): AgentConfig {
   return {
     llm: { ...emptyConfig.llm, ...(data.llm ?? {}) },
     ssh,
+    weixin: { ...emptyConfig.weixin, ...(data.weixin ?? {}) },
   };
 }
 

@@ -10,6 +10,7 @@ __pycache__/
 .mcp.json
 backend/.mcp.json
 backend/data/rag_storage/
+backend/.weixin/
 
 # IDE
 .idea/
