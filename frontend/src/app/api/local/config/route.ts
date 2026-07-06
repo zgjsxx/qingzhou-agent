@@ -34,6 +34,14 @@ const defaultConfig = {
     requireMention: true,
     mergeWaitSeconds: 3,
   },
+  discord: {
+    enabled: false,
+    botToken: "",
+    allowedUsers: "",
+    requireMention: true,
+    mergeWaitSeconds: 3,
+    proxy: "",
+  },
 };
 
 function migrateSsh(sshRaw: unknown): typeof defaultHost[] {
@@ -55,6 +63,7 @@ async function readConfig() {
       ssh: migrateSsh(parsed.ssh),
       weixin: { ...defaultConfig.weixin, ...(parsed.weixin ?? {}) },
       telegram: { ...defaultConfig.telegram, ...(parsed.telegram ?? {}) },
+      discord: { ...defaultConfig.discord, ...(parsed.discord ?? {}) },
     };
   } catch {
     return defaultConfig;
@@ -72,6 +81,7 @@ export async function POST(request: NextRequest) {
     ssh: migrateSsh(body.ssh),
     weixin: { ...defaultConfig.weixin, ...(body.weixin ?? {}) },
     telegram: { ...defaultConfig.telegram, ...(body.telegram ?? {}) },
+    discord: { ...defaultConfig.discord, ...(body.discord ?? {}) },
   };
   await mkdir(backendDir, { recursive: true });
   await writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf-8");

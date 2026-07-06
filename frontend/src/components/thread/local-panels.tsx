@@ -84,6 +84,14 @@ type AgentConfig = {
     requireMention: boolean;
     mergeWaitSeconds: number;
   };
+  discord: {
+    enabled: boolean;
+    botToken: string;
+    allowedUsers: string;
+    requireMention: boolean;
+    mergeWaitSeconds: number;
+    proxy: string;
+  };
 };
 
 const emptyHost: SshHost = {
@@ -106,6 +114,14 @@ const emptyConfig: AgentConfig = {
     allowedUsers: "",
     requireMention: true,
     mergeWaitSeconds: 3,
+  },
+  discord: {
+    enabled: false,
+    botToken: "",
+    allowedUsers: "",
+    requireMention: true,
+    mergeWaitSeconds: 3,
+    proxy: "",
   },
 };
 
@@ -660,7 +676,7 @@ function ConfigPage(props: {
   onRemoveSshHost: (index: number) => void;
 }) {
   const [activeSection, setActiveSection] = useState<
-    "llm" | "ssh" | "weixin" | "telegram"
+    "llm" | "ssh" | "weixin" | "telegram" | "discord"
   >("llm");
   const [selectedSshIndex, setSelectedSshIndex] = useState(0);
 
@@ -708,6 +724,12 @@ function ConfigPage(props: {
       key: "telegram" as const,
       label: "Telegram",
       summary: props.config.telegram.enabled ? "Enabled" : "Disabled",
+      count: null,
+    },
+    {
+      key: "discord" as const,
+      label: "Discord",
+      summary: props.config.discord.enabled ? "Enabled" : "Disabled",
       count: null,
     },
   ];
@@ -1044,7 +1066,7 @@ function ConfigPage(props: {
                 </div>
               </CardContent>
             </Card>
-          ) : (
+          ) : activeSection === "telegram" ? (
             <Card className="overflow-hidden rounded-lg">
               <CardHeader>
                 <CardTitle>Telegram Bot</CardTitle>
@@ -1114,6 +1136,81 @@ function ConfigPage(props: {
                 </div>
               </CardContent>
             </Card>
+          ) : (
+            <Card className="overflow-hidden rounded-lg">
+              <CardHeader>
+                <CardTitle>Discord Bot</CardTitle>
+                <CardDescription>
+                  Official Discord Gateway connection using discord.py.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid max-w-2xl gap-5">
+                <div className="flex items-center justify-between gap-4 rounded-md border p-4">
+                  <Label htmlFor="discord-enabled">
+                    Enable Discord bridge
+                  </Label>
+                  <Switch
+                    id="discord-enabled"
+                    checked={props.config.discord.enabled}
+                    onCheckedChange={(checked) =>
+                      props.onChange("discord", "enabled", checked)
+                    }
+                  />
+                </div>
+                <LabeledInput
+                  label="Bot Token"
+                  type="password"
+                  value={props.config.discord.botToken}
+                  onChange={(value) =>
+                    props.onChange("discord", "botToken", value)
+                  }
+                />
+                <LabeledInput
+                  label="Allowed User IDs"
+                  value={props.config.discord.allowedUsers}
+                  onChange={(value) =>
+                    props.onChange("discord", "allowedUsers", value)
+                  }
+                />
+                <LabeledInput
+                  label="Proxy"
+                  value={props.config.discord.proxy}
+                  onChange={(value) =>
+                    props.onChange("discord", "proxy", value)
+                  }
+                />
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <LabeledInput
+                    label="Merge Wait (seconds)"
+                    type="number"
+                    value={String(props.config.discord.mergeWaitSeconds)}
+                    onChange={(value) =>
+                      props.onChange(
+                        "discord",
+                        "mergeWaitSeconds",
+                        Number(value),
+                      )
+                    }
+                  />
+                  <div className="flex items-center justify-between gap-4 rounded-md border px-4 py-3">
+                    <Label htmlFor="discord-require-mention">
+                      Require server mention
+                    </Label>
+                    <Switch
+                      id="discord-require-mention"
+                      checked={props.config.discord.requireMention}
+                      onCheckedChange={(checked) =>
+                        props.onChange(
+                          "discord",
+                          "requireMention",
+                          checked,
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           )}
         </div>
       </div>
@@ -1142,6 +1239,7 @@ function mergeConfig(data: Partial<AgentConfig>): AgentConfig {
     ssh,
     weixin: { ...emptyConfig.weixin, ...(data.weixin ?? {}) },
     telegram: { ...emptyConfig.telegram, ...(data.telegram ?? {}) },
+    discord: { ...emptyConfig.discord, ...(data.discord ?? {}) },
   };
 }
 
