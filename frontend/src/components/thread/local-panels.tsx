@@ -74,6 +74,24 @@ type AgentConfig = {
     baseUrl: string;
   };
   ssh: SshHost[];
+  weixin: {
+    enabled: boolean;
+  };
+  telegram: {
+    enabled: boolean;
+    botToken: string;
+    allowedUsers: string;
+    requireMention: boolean;
+    mergeWaitSeconds: number;
+  };
+  discord: {
+    enabled: boolean;
+    botToken: string;
+    allowedUsers: string;
+    requireMention: boolean;
+    mergeWaitSeconds: number;
+    proxy: string;
+  };
 };
 
 const emptyHost: SshHost = {
@@ -89,6 +107,22 @@ const emptyHost: SshHost = {
 const emptyConfig: AgentConfig = {
   llm: { adapterType: "anthropic", model: "glm-5.1", apiKey: "", baseUrl: "" },
   ssh: [],
+  weixin: { enabled: false },
+  telegram: {
+    enabled: false,
+    botToken: "",
+    allowedUsers: "",
+    requireMention: true,
+    mergeWaitSeconds: 3,
+  },
+  discord: {
+    enabled: false,
+    botToken: "",
+    allowedUsers: "",
+    requireMention: true,
+    mergeWaitSeconds: 3,
+    proxy: "",
+  },
 };
 
 export function LocalPanels() {
@@ -126,7 +160,7 @@ export function LocalPanels() {
   const updateConfig = (
     section: keyof AgentConfig,
     key: string,
-    value: string | number,
+    value: string | number | boolean,
   ) => {
     setConfig((current) => ({
       ...current,
@@ -631,7 +665,7 @@ function ConfigPage(props: {
   onChange: (
     section: keyof AgentConfig,
     key: string,
-    value: string | number,
+    value: string | number | boolean,
   ) => void;
   onUpdateSshHost: (
     index: number,
@@ -641,7 +675,9 @@ function ConfigPage(props: {
   onAddSshHost: () => void;
   onRemoveSshHost: (index: number) => void;
 }) {
-  const [activeSection, setActiveSection] = useState<"llm" | "ssh">("llm");
+  const [activeSection, setActiveSection] = useState<
+    "llm" | "ssh" | "weixin" | "telegram" | "discord"
+  >("llm");
   const [selectedSshIndex, setSelectedSshIndex] = useState(0);
 
   useEffect(() => {
@@ -677,6 +713,24 @@ function ConfigPage(props: {
           ? `${props.config.ssh.length} host${props.config.ssh.length > 1 ? "s" : ""}`
           : "No hosts",
       count: props.config.ssh.length,
+    },
+    {
+      key: "weixin" as const,
+      label: "Weixin",
+      summary: props.config.weixin.enabled ? "Enabled" : "Disabled",
+      count: null,
+    },
+    {
+      key: "telegram" as const,
+      label: "Telegram",
+      summary: props.config.telegram.enabled ? "Enabled" : "Disabled",
+      count: null,
+    },
+    {
+      key: "discord" as const,
+      label: "Discord",
+      summary: props.config.discord.enabled ? "Enabled" : "Disabled",
+      count: null,
     },
   ];
 
@@ -761,7 +815,7 @@ function ConfigPage(props: {
                 />
               </CardContent>
             </Card>
-          ) : (
+          ) : activeSection === "ssh" ? (
             <Card className="rounded-lg">
               <CardHeader>
                 <CardTitle>SSH Hosts</CardTitle>
@@ -983,6 +1037,180 @@ function ConfigPage(props: {
                 </div>
               </CardContent>
             </Card>
+          ) : activeSection === "weixin" ? (
+            <Card className="overflow-hidden rounded-lg">
+              <CardHeader>
+                <CardTitle>Weixin iLink</CardTitle>
+                <CardDescription>
+                  Personal WeChat direct messages through an iLink bot account.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid max-w-2xl gap-5">
+                <div className="flex items-center justify-between gap-4 rounded-md border p-4">
+                  <div>
+                    <Label htmlFor="weixin-enabled">Enable Weixin bridge</Label>
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      The backend loads saved QR-login credentials after restart.
+                    </p>
+                  </div>
+                  <Switch
+                    id="weixin-enabled"
+                    checked={props.config.weixin.enabled}
+                    onCheckedChange={(checked) =>
+                      props.onChange("weixin", "enabled", checked)
+                    }
+                  />
+                </div>
+                <div className="bg-muted/40 rounded-md border px-4 py-3 font-mono text-xs">
+                  python scripts/weixin_login.py
+                </div>
+              </CardContent>
+            </Card>
+          ) : activeSection === "telegram" ? (
+            <Card className="overflow-hidden rounded-lg">
+              <CardHeader>
+                <CardTitle>Telegram Bot</CardTitle>
+                <CardDescription>
+                  Official Telegram Bot API connection using long polling.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid max-w-2xl gap-5">
+                <div className="flex items-center justify-between gap-4 rounded-md border p-4">
+                  <Label htmlFor="telegram-enabled">
+                    Enable Telegram bridge
+                  </Label>
+                  <Switch
+                    id="telegram-enabled"
+                    checked={props.config.telegram.enabled}
+                    onCheckedChange={(checked) =>
+                      props.onChange("telegram", "enabled", checked)
+                    }
+                  />
+                </div>
+                <LabeledInput
+                  label="Bot Token"
+                  type="password"
+                  value={props.config.telegram.botToken}
+                  onChange={(value) =>
+                    props.onChange("telegram", "botToken", value)
+                  }
+                />
+                <LabeledInput
+                  label="Allowed User IDs"
+                  value={props.config.telegram.allowedUsers}
+                  onChange={(value) =>
+                    props.onChange("telegram", "allowedUsers", value)
+                  }
+                />
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <LabeledInput
+                    label="Merge Wait (seconds)"
+                    type="number"
+                    value={String(
+                      props.config.telegram.mergeWaitSeconds,
+                    )}
+                    onChange={(value) =>
+                      props.onChange(
+                        "telegram",
+                        "mergeWaitSeconds",
+                        Number(value),
+                      )
+                    }
+                  />
+                  <div className="flex items-center justify-between gap-4 rounded-md border px-4 py-3">
+                    <Label htmlFor="telegram-require-mention">
+                      Require group mention
+                    </Label>
+                    <Switch
+                      id="telegram-require-mention"
+                      checked={props.config.telegram.requireMention}
+                      onCheckedChange={(checked) =>
+                        props.onChange(
+                          "telegram",
+                          "requireMention",
+                          checked,
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="overflow-hidden rounded-lg">
+              <CardHeader>
+                <CardTitle>Discord Bot</CardTitle>
+                <CardDescription>
+                  Official Discord Gateway connection using discord.py.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid max-w-2xl gap-5">
+                <div className="flex items-center justify-between gap-4 rounded-md border p-4">
+                  <Label htmlFor="discord-enabled">
+                    Enable Discord bridge
+                  </Label>
+                  <Switch
+                    id="discord-enabled"
+                    checked={props.config.discord.enabled}
+                    onCheckedChange={(checked) =>
+                      props.onChange("discord", "enabled", checked)
+                    }
+                  />
+                </div>
+                <LabeledInput
+                  label="Bot Token"
+                  type="password"
+                  value={props.config.discord.botToken}
+                  onChange={(value) =>
+                    props.onChange("discord", "botToken", value)
+                  }
+                />
+                <LabeledInput
+                  label="Allowed User IDs"
+                  value={props.config.discord.allowedUsers}
+                  onChange={(value) =>
+                    props.onChange("discord", "allowedUsers", value)
+                  }
+                />
+                <LabeledInput
+                  label="Proxy"
+                  value={props.config.discord.proxy}
+                  onChange={(value) =>
+                    props.onChange("discord", "proxy", value)
+                  }
+                />
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <LabeledInput
+                    label="Merge Wait (seconds)"
+                    type="number"
+                    value={String(props.config.discord.mergeWaitSeconds)}
+                    onChange={(value) =>
+                      props.onChange(
+                        "discord",
+                        "mergeWaitSeconds",
+                        Number(value),
+                      )
+                    }
+                  />
+                  <div className="flex items-center justify-between gap-4 rounded-md border px-4 py-3">
+                    <Label htmlFor="discord-require-mention">
+                      Require server mention
+                    </Label>
+                    <Switch
+                      id="discord-require-mention"
+                      checked={props.config.discord.requireMention}
+                      onCheckedChange={(checked) =>
+                        props.onChange(
+                          "discord",
+                          "requireMention",
+                          checked,
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           )}
         </div>
       </div>
@@ -1009,6 +1237,9 @@ function mergeConfig(data: Partial<AgentConfig>): AgentConfig {
   return {
     llm: { ...emptyConfig.llm, ...(data.llm ?? {}) },
     ssh,
+    weixin: { ...emptyConfig.weixin, ...(data.weixin ?? {}) },
+    telegram: { ...emptyConfig.telegram, ...(data.telegram ?? {}) },
+    discord: { ...emptyConfig.discord, ...(data.discord ?? {}) },
   };
 }
 
