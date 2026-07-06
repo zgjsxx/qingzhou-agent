@@ -18,6 +18,7 @@ from agent_botpy import start_botpy_bridge
 from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent_lark import start_lark_ws_bridge
 from agent_weixin import start_weixin_bridge
+from agent_telegram import start_telegram_bridge
 from agent_memory import AgentMemoryMiddleware
 from agent_mcp import load_mcp_tools
 from agent_permissions import AgentPermissionMiddleware
@@ -89,3 +90,4 @@ start_cron_scheduler()
 start_lark_ws_bridge(graph)
 start_botpy_bridge(graph)
 start_weixin_bridge(graph)
+start_telegram_bridge(graph)
