@@ -8,7 +8,7 @@
 
 ## Root cause
 
-`frontend/src/components/thread/messages/tool-calls.tsx` 中有三个性能瓶颈：
+`web/src/components/thread/messages/tool-calls.tsx` 中有三个性能瓶颈：
 
 ### 1. ToolResult 每次 render 都重新 JSON.parse + JSON.stringify（第 148-158 行）
 

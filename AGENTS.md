@@ -8,7 +8,7 @@
 - 工具定义：`backend/src/tools.py`
 - 智能体交互日志：`backend/src/agent_logging.py`
 - LangGraph 开发配置：`backend/langgraph.json`
-- 前端聊天界面：`frontend/src`
+- 前端聊天界面：`web/src`
 
 后端通过 LangGraph Server 暴露名为 `agent` 的图，地址为
 `http://localhost:2024`。前端 Next.js 应用从 `http://localhost:3000`

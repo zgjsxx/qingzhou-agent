@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $backendDir = Join-Path $root "backend"
-$frontendDir = Join-Path $root "frontend"
+$frontendDir = Join-Path $root "web"
 $venvDir = Join-Path $backendDir ".venv"
 $pythonExe = Join-Path $venvDir "Scripts\python.exe"
 

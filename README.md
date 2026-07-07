@@ -64,7 +64,7 @@ langgraph dev
 ### 2. 启动前端
 
 ```bash
-cd frontend
+cd web
 
 # 从模板创建 .env
 cp .env.example .env

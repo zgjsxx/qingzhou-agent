@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $backendDir = Join-Path $root "backend"
-$frontendDir = Join-Path $root "frontend"
+$frontendDir = Join-Path $root "web"
 $runtimeDir = Join-Path $root ".runtime"
 $logDir = Join-Path $runtimeDir "logs"
 $pidFile = Join-Path $runtimeDir "pids.json"
