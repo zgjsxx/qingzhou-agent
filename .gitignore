@@ -1,37 +1,17 @@
-# Dependencies
-node_modules/
 .venv/
 __pycache__/
 *.pyc
-
-# Environment
 .env
-.env.local
 .mcp.json
-backend/.mcp.json
-backend/data/rag_storage/
-backend/.weixin/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-
-# OS
-.DS_Store
-Thumbs.db
-.tmp/
-
-# Build
-dist/
-build/
-.next/
-
-# LangGraph dev server cache
-.langgraph_api/
-
-# Agent runtime outputs
-.transcripts/
+.agent_config.json
+logs/
+.tasks/
 .agent_outputs/
-.memory/
-.runtime/
+.agent_uploads/
+.agent_cron/
+ssh_keys
+.env.example
+.langgraph_api/
+.mcp.example.json
+.weixin
+botpy.log*
