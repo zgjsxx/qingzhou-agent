@@ -64,7 +64,7 @@
 
 文件：
 
-- [backend/src/gateway/platforms/lark.py](D:/ai/xu-agent/backend/src/gateway/platforms/lark.py)
+- [gateway/platforms/lark.py](D:/ai/xu-agent/gateway/platforms/lark.py)
 
 当前逻辑：
 
@@ -84,7 +84,7 @@
 
 文件：
 
-- [backend/src/gateway/platforms/botpy.py](D:/ai/xu-agent/backend/src/gateway/platforms/botpy.py)
+- [gateway/platforms/botpy.py](D:/ai/xu-agent/gateway/platforms/botpy.py)
 
 这里也有同类最终回复提取逻辑，因此同样存在被短收尾覆盖正文的风险。
 

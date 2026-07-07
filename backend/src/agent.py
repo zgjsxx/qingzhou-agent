@@ -4,8 +4,12 @@ import sys
 import os
 from pathlib import Path
 
-# Make backend/src importable when LangGraph loads agent.py by file path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Make backend/src and the repository root importable when LangGraph loads
+# agent.py by file path from backend/langgraph.json.
+BACKEND_SRC_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BACKEND_SRC_DIR.parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(BACKEND_SRC_DIR))
 
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model

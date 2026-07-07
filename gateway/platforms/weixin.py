@@ -41,7 +41,7 @@ DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 2000
 SESSION_EXPIRED_ERRCODE = -14
 
-BACKEND_DIR = Path(__file__).resolve().parents[3]
+BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
 WEIXIN_DATA_DIR = BACKEND_DIR / ".weixin"
 ACCOUNT_FILE = WEIXIN_DATA_DIR / "account.json"
 SYNC_FILE = WEIXIN_DATA_DIR / "sync.json"

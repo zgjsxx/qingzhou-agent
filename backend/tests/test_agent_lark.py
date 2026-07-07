@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gateway.platforms import lark as agent_lark
 
