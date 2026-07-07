@@ -64,7 +64,7 @@
 
 文件：
 
-- [backend/src/agent_lark.py](D:/ai/xu-agent/backend/src/agent_lark.py)
+- [backend/src/gateway/platforms/lark.py](D:/ai/xu-agent/backend/src/gateway/platforms/lark.py)
 
 当前逻辑：
 
@@ -84,7 +84,7 @@
 
 文件：
 
-- [backend/src/agent_botpy.py](D:/ai/xu-agent/backend/src/agent_botpy.py)
+- [backend/src/gateway/platforms/botpy.py](D:/ai/xu-agent/backend/src/gateway/platforms/botpy.py)
 
 这里也有同类最终回复提取逻辑，因此同样存在被短收尾覆盖正文的风险。
 
@@ -157,4 +157,3 @@
 4. 看桥接层是否仍然使用“倒序取最后一条 AIMessage”的逻辑
 
 只要这四步都成立，基本就可以确认为同类问题。
-

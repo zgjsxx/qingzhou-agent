@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import agent_botpy
+from gateway.platforms import botpy as agent_botpy
+
+sys.modules["agent_botpy"] = agent_botpy
 from agent_commands import CLEAR_RESPONSE, HELP_RESPONSE
 
 
@@ -54,7 +56,8 @@ class AgentBotpyTest(unittest.TestCase):
                 reply=AsyncMock(),
             )
 
-            await bridge._handle_message("at_message_create", message)
+            with patch("agent_botpy._stream_channel_messages_enabled", return_value=False):
+                await bridge._handle_message("at_message_create", message)
 
             message.reply.assert_awaited_once_with(content=HELP_RESPONSE)
 
@@ -79,7 +82,8 @@ class AgentBotpyTest(unittest.TestCase):
                 reply=AsyncMock(),
             )
 
-            await bridge._handle_message("at_message_create", message)
+            with patch("agent_botpy._stream_channel_messages_enabled", return_value=False):
+                await bridge._handle_message("at_message_create", message)
 
             self.assertEqual(calls[0][0], {"configurable": {"thread_id": thread_id}})
             self.assertEqual(agent_botpy._history_for_thread(thread_id), [])
@@ -104,7 +108,8 @@ class AgentBotpyTest(unittest.TestCase):
                 reply=AsyncMock(),
             )
 
-            await bridge._handle_message("at_message_create", message)
+            with patch("agent_botpy._stream_channel_messages_enabled", return_value=False):
+                await bridge._handle_message("at_message_create", message)
 
             message.reply.assert_awaited_once_with(content="收到 QQ 消息")
 

@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import agent_telegram
+from gateway.platforms import telegram as agent_telegram
+
+sys.modules["agent_telegram"] = agent_telegram
 from agent_commands import HELP_RESPONSE
 
 

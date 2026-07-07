@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import agent_weixin
+from gateway.platforms import weixin as agent_weixin
+
+sys.modules["agent_weixin"] = agent_weixin
 from agent_commands import HELP_RESPONSE
 
 

@@ -22,7 +22,7 @@ DEFAULT_REPLY_MAX_CHARS = 1900
 DEFAULT_SEND_RETRIES = 3
 DEFAULT_CONNECT_RETRY_SECONDS = 15.0
 DISCORD_UPLOAD_DIR = (
-    Path(__file__).resolve().parents[1] / ".agent_uploads" / "discord"
+    Path(__file__).resolve().parents[3] / ".agent_uploads" / "discord"
 )
 
 _start_lock = threading.Lock()

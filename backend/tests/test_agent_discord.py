@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import agent_discord
+from gateway.platforms import discord as agent_discord
+
+sys.modules["agent_discord"] = agent_discord
 from agent_commands import HELP_RESPONSE
 
 

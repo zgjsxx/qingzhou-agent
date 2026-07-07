@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_weixin import ACCOUNT_FILE, qr_login
+from gateway.platforms.weixin import ACCOUNT_FILE, qr_login
 
 
 async def main() -> int:

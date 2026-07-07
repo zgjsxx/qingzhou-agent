@@ -19,7 +19,7 @@ from agent_logging import log_event
 DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 4000
 TELEGRAM_UPLOAD_DIR = (
-    Path(__file__).resolve().parents[1] / ".agent_uploads" / "telegram"
+    Path(__file__).resolve().parents[3] / ".agent_uploads" / "telegram"
 )
 
 _start_lock = threading.Lock()

@@ -7,11 +7,22 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import agent_lark
+from gateway.platforms import lark as agent_lark
+
+sys.modules["agent_lark"] = agent_lark
 from agent_commands import CLEAR_RESPONSE, HELP_RESPONSE
 
 
 class AgentLarkTest(unittest.TestCase):
+    def tearDown(self):
+        buf = agent_lark._pending_buffer
+        with buf._lock:
+            for timer in buf._timers.values():
+                timer.cancel()
+            buf._timers.clear()
+            buf._events.clear()
+            buf._reaction_ids.clear()
+
     def test_worker_pool_uses_daemon_threads(self):
         pool = agent_lark.DaemonWorkerPool(max_workers=2, thread_name_prefix="test-lark")
         try:
