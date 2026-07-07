@@ -16,7 +16,7 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
 
-BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
 def _int_env(name: str, default: int) -> int:
@@ -44,7 +44,7 @@ def _log_dir() -> Path:
     configured = Path(os.getenv("AGENT_LOG_DIR", "logs"))
     if configured.is_absolute():
         return configured
-    return BACKEND_DIR / configured
+    return ROOT_DIR / ".runtime" / configured
 
 
 LOG_DIR = _log_dir()
