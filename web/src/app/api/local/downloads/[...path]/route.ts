@@ -5,7 +5,6 @@ import path from "node:path";
 export const runtime = "nodejs";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const backendDir = path.join(repoRoot, "backend");
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
 
@@ -56,9 +55,9 @@ export async function GET(
   // Reconstruct the relative path from the URL segments
   const relativePath = segments.join("/");
 
-  // Resolve against backend directory and ensure no path traversal
-  const filePath = path.resolve(backendDir, relativePath);
-  const rel = path.relative(backendDir, filePath);
+  // Resolve against repo root and ensure no path traversal
+  const filePath = path.resolve(repoRoot, relativePath);
+  const rel = path.relative(repoRoot, filePath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return NextResponse.json({ error: "path traversal denied" }, { status: 403 });
   }

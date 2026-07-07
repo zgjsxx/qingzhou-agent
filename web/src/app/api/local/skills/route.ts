@@ -3,16 +3,15 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const backendRoot = path.join(repoRoot, "backend");
 
 function resolveSkillsDir() {
   const configured = process.env.AGENT_SKILLS_DIR?.trim();
   if (!configured) {
-    return path.join(backendRoot, "skills");
+    return path.join(repoRoot, "skills");
   }
   return path.isAbsolute(configured)
     ? configured
-    : path.resolve(backendRoot, configured);
+    : path.resolve(repoRoot, configured);
 }
 
 function parseSkill(raw: string, directory: string) {

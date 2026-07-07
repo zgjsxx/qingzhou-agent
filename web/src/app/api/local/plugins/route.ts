@@ -3,9 +3,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const backendDir = path.join(repoRoot, "backend");
-const configPath = path.join(backendDir, ".mcp.json");
-const exampleConfigPath = path.join(backendDir, ".mcp.example.json");
+const configPath = path.join(repoRoot, ".mcp.json");
+const exampleConfigPath = path.join(repoRoot, ".mcp.example.json");
 
 type Plugin = {
   name: string;

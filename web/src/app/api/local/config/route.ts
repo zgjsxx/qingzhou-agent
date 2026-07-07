@@ -3,8 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const backendDir = path.join(repoRoot, "backend");
-const configPath = path.join(backendDir, ".agent_config.json");
+const configPath = path.join(repoRoot, ".agent_config.json");
 
 const defaultHost = {
   host: "",
@@ -83,7 +82,7 @@ export async function POST(request: NextRequest) {
     telegram: { ...defaultConfig.telegram, ...(body.telegram ?? {}) },
     discord: { ...defaultConfig.discord, ...(body.discord ?? {}) },
   };
-  await mkdir(backendDir, { recursive: true });
+  await mkdir(repoRoot, { recursive: true });
   await writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf-8");
   return NextResponse.json(nextConfig);
 }

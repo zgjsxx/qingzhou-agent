@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 export const runtime = "nodejs";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const uploadRoot = path.join(repoRoot, "backend", ".agent_uploads");
+const uploadRoot = path.join(repoRoot, ".agent_uploads");
 const maxUploadBytes = 50 * 1024 * 1024;
 
 const supportedTypes = new Set([
