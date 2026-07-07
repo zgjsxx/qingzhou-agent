@@ -7,9 +7,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
-$backendDir = Join-Path $root "backend"
 $frontendDir = Join-Path $root "web"
-$venvDir = Join-Path $backendDir ".venv"
+$venvDir = Join-Path $root ".venv"
 $pythonExe = Join-Path $venvDir "Scripts\python.exe"
 
 function Invoke-Checked {
@@ -57,18 +56,18 @@ if (-not $SkipFrontend -and -not $AllowRunning) {
 if (-not $SkipBackend) {
     if (-not (Test-Path $pythonExe)) {
         Write-Host "[backend] Creating Python virtual environment..."
-        Invoke-Checked -FilePath "python" -ArgumentList @("-m", "venv", $venvDir) -WorkingDirectory $backendDir
+        Invoke-Checked -FilePath "python" -ArgumentList @("-m", "venv", $venvDir) -WorkingDirectory $root
     }
 
     & $pythonExe -m pip --version *> $null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[backend] pip is missing; bootstrapping it with ensurepip..."
-        Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "ensurepip", "--upgrade") -WorkingDirectory $backendDir
+        Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "ensurepip", "--upgrade") -WorkingDirectory $root
     }
 
     Write-Host "[backend] Installing dependencies..."
-    Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "--upgrade", "pip") -WorkingDirectory $backendDir
-    Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "-r", "requirements.txt") -WorkingDirectory $backendDir
+    Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "--upgrade", "pip") -WorkingDirectory $root
+    Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "-r", "requirements.txt") -WorkingDirectory $root
 }
 
 if (-not $SkipFrontend) {

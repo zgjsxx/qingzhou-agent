@@ -7,12 +7,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
-$backendDir = Join-Path $root "backend"
 $frontendDir = Join-Path $root "web"
 $runtimeDir = Join-Path $root ".runtime"
 $logDir = Join-Path $runtimeDir "logs"
 $pidFile = Join-Path $runtimeDir "pids.json"
-$langgraphExe = Join-Path $backendDir ".venv\Scripts\langgraph.exe"
+$pythonExe = Join-Path $root ".venv\Scripts\python.exe"
 $nextExe = Join-Path $frontendDir "node_modules\.bin\next.CMD"
 $nextBuild = Join-Path $frontendDir ".next"
 
@@ -83,7 +82,7 @@ if (Test-Port 2024) {
 if (Test-Port 3000) {
     throw "Port 3000 is already in use. Stop the existing frontend first."
 }
-if (-not (Test-Path $langgraphExe)) {
+if (-not (Test-Path $pythonExe)) {
     throw "Backend environment is missing. Run .\build.ps1 first."
 }
 if (-not (Test-Path $nextBuild)) {
@@ -109,9 +108,9 @@ $env:PYTHONIOENCODING = "utf-8"
 
 Write-Host "Starting backend..."
 $backendProcess = Start-Process `
-    -FilePath $langgraphExe `
-    -ArgumentList @("dev", "--no-reload", "--no-browser", "--host", "127.0.0.1", "--port", "2024") `
-    -WorkingDirectory $backendDir `
+    -FilePath $pythonExe `
+    -ArgumentList @("-m", "langgraph_cli", "dev", "--no-reload", "--no-browser", "--host", "127.0.0.1", "--port", "2024") `
+    -WorkingDirectory $root `
     -WindowStyle Hidden `
     -RedirectStandardOutput (Join-Path $logDir "backend.out.log") `
     -RedirectStandardError (Join-Path $logDir "backend.err.log") `
