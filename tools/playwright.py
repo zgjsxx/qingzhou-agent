@@ -20,8 +20,8 @@ from urllib.parse import urlparse
 from langchain.tools import tool
 
 
-BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
-if not BACKEND_DIR.is_absolute():
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if not ROOT_DIR.is_absolute():
     raise RuntimeError("tools/playwright.py must be loaded from an absolute module path.")
 DEFAULT_THREAD_ID = "__default__"
 DEFAULT_TIMEOUT_MS = 30_000
@@ -95,7 +95,7 @@ def _validate_url(url: str) -> str:
 
 
 def _output_path(path: str) -> Path:
-    root = BACKEND_DIR
+    root = ROOT_DIR
     requested = Path(str(path or "output/playwright.png").strip()).expanduser()
     resolved = requested if requested.is_absolute() else root / requested
     resolved = Path(os.path.normpath(str(resolved)))

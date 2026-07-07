@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
-CONFIG_FILE = BACKEND_DIR / ".agent_config.json"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+CONFIG_FILE = ROOT_DIR / ".agent_config.json"
 
 
 def load_agent_config() -> dict[str, Any]:

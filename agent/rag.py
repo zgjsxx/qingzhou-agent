@@ -14,10 +14,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from agent.tasks import BACKEND_DIR
+from agent.tasks import ROOT_DIR
 
-DEFAULT_DOCS_DIR = BACKEND_DIR / "data" / "rag_docs"
-DEFAULT_STORAGE_DIR = BACKEND_DIR / "data" / "rag_storage"
+DEFAULT_DOCS_DIR = ROOT_DIR / "data" / "rag_docs"
+DEFAULT_STORAGE_DIR = ROOT_DIR / "data" / "rag_storage"
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 20
 MAX_CHUNK_CHARS = 1800
@@ -80,7 +80,7 @@ def _env_first(*names: str, default: str = "") -> str:
 
 def _resolve_path(value: str, default: Path) -> Path:
     raw = Path(value).expanduser() if value else default
-    resolved = raw if raw.is_absolute() else BACKEND_DIR / raw
+    resolved = raw if raw.is_absolute() else ROOT_DIR / raw
     return resolved.absolute()
 
 

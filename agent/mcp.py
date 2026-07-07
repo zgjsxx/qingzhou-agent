@@ -16,7 +16,6 @@ from langchain_core.tools import StructuredTool
 from agent.logging import log_event
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BACKEND_DIR = PROJECT_ROOT / "backend"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_TIMEOUT_SECONDS = 15
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -61,7 +60,7 @@ def _candidate_config_paths() -> list[Path]:
     if configured:
         path = Path(configured).expanduser()
         paths.append(path if path.is_absolute() else PROJECT_ROOT / path)
-    paths.extend([BACKEND_DIR / ".mcp.json", PROJECT_ROOT / ".mcp.json"])
+    paths.append(PROJECT_ROOT / ".mcp.json")
     return paths
 
 

@@ -14,8 +14,8 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from agent.logging import log_event
 
-BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
-MEMORY_DIR = BACKEND_DIR / ".memory"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+MEMORY_DIR = ROOT_DIR / ".memory"
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 MEMORY_TYPES = {"user", "feedback", "project", "reference"}
 

@@ -8,10 +8,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-BACKEND_DIR = Path(__file__).parent.parent
-SRC_DIR = BACKEND_DIR / "src"
+ROOT_DIR = Path(__file__).parent.parent
 
-sys.path.insert(0, str(BACKEND_DIR.parent))
+sys.path.insert(0, str(ROOT_DIR))
 
 from tools import playwright as playwright_tools
 from agent.permissions import check_tool_permission
@@ -20,14 +19,14 @@ from agent.permissions import check_tool_permission
 def _tool_names_with_env(enabled: bool) -> set[str]:
     env = os.environ.copy()
     env["AGENT_PLAYWRIGHT_ENABLED"] = "true" if enabled else "false"
-    env["PYTHONPATH"] = str(BACKEND_DIR.parent)
+    env["PYTHONPATH"] = str(ROOT_DIR)
     script = (
         "from tools import ALL_TOOLS; "
         "print(','.join(sorted(getattr(tool, 'name', '') for tool in ALL_TOOLS)))"
     )
     completed = subprocess.run(
         [sys.executable, "-c", script],
-        cwd=BACKEND_DIR,
+        cwd=ROOT_DIR,
         env=env,
         capture_output=True,
         text=True,

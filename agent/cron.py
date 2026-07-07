@@ -16,9 +16,9 @@ from typing import Any
 from langgraph_sdk import get_client
 
 from agent.logging import log_event
-from agent.tasks import BACKEND_DIR
+from agent.tasks import ROOT_DIR
 
-CRON_DIR = BACKEND_DIR / ".agent_cron"
+CRON_DIR = ROOT_DIR / ".agent_cron"
 DEFAULT_STORAGE_PATH = CRON_DIR / "scheduled_tasks.json"
 DEFAULT_POLL_SECONDS = 30
 DEFAULT_MAX_JOBS = 50
@@ -73,7 +73,7 @@ def _storage_path() -> Path:
     if not value:
         return DEFAULT_STORAGE_PATH
     path = Path(value).expanduser()
-    return path if path.is_absolute() else BACKEND_DIR / path
+    return path if path.is_absolute() else ROOT_DIR / path
 
 
 def _api_url() -> str:

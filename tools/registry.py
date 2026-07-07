@@ -27,7 +27,7 @@ from agent.config import config_int, config_str, ssh_host_entry
 from agent.context import MANUAL_COMPACT_MARKER
 from agent.memory import write_memory_file
 from agent.tasks import (
-    BACKEND_DIR,
+    ROOT_DIR,
     claim_persistent_task,
     complete_persistent_task,
     create_persistent_task,
@@ -41,7 +41,7 @@ from agent.skills import load_skill_content
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_OUTPUT_CHARS = 12000
-BACKGROUND_DIR = BACKEND_DIR / ".agent_outputs" / "background"
+BACKGROUND_DIR = ROOT_DIR / ".agent_outputs" / "background"
 BACKGROUND_DEFAULT_TIMEOUT_SECONDS = 1800
 BACKGROUND_TASKS_LOCK = threading.Lock()
 BACKGROUND_PROCESSES: dict[str, subprocess.Popen[str]] = {}
@@ -75,10 +75,10 @@ def reset_current_tool_thread_id(token) -> None:
 
 def _resolve_cwd(cwd: str) -> str:
     if not cwd:
-        return str(BACKEND_DIR)
+        return str(ROOT_DIR)
 
     requested = Path(cwd).expanduser()
-    resolved = requested if requested.is_absolute() else BACKEND_DIR / requested
+    resolved = requested if requested.is_absolute() else ROOT_DIR / requested
     if not resolved.exists():
         raise ValueError(f"Working directory does not exist: {resolved}")
     if not resolved.is_dir():

@@ -8,8 +8,8 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
-TASKS_DIR = BACKEND_DIR / ".tasks"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+TASKS_DIR = ROOT_DIR / ".tasks"
 
 
 @dataclass

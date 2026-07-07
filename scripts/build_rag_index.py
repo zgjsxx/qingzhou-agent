@@ -16,7 +16,6 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BACKEND_DIR = REPO_ROOT / "backend"
 
 
 def _load_env_file(path: Path) -> None:
@@ -44,8 +43,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-file",
-        default=str(BACKEND_DIR / ".env"),
-        help="Env file to load before building. Defaults to backend/.env.",
+        default=str(REPO_ROOT / ".env"),
+        help="Env file to load before building. Defaults to .env.",
     )
     return parser.parse_args()
 
