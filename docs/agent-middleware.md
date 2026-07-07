@@ -17,7 +17,7 @@ middleware 是插入这些阶段的拦截层。它可以读取状态、改写模
 
 ## 当前项目中的 middleware
 
-`xu-agent` 在 `agent/graph.py` 中配置 middleware；`backend/src/agent.py` 只保留为 LangGraph 配置兼容入口：
+`xu-agent` 在 `agent/graph.py` 中配置 middleware：
 
 ```python
 middleware = [

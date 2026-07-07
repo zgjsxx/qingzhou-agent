@@ -38,7 +38,7 @@ class BackgroundTaskTest(unittest.TestCase):
             )
 
             cancel_func = getattr(tools.cancel_background_task, "func", tools.cancel_background_task)
-            with patch.object(tools, "BACKGROUND_DIR", background_dir):
+            with patch("tools.registry.BACKGROUND_DIR", background_dir):
                 result = cancel_func(task_id)
                 updated = json.loads((background_dir / f"{task_id}.json").read_text(encoding="utf-8"))
 

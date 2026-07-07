@@ -103,7 +103,7 @@ LLM 和 SSH 配置也可通过前端配置面板管理。
 
 ## 扩展
 
-- **新增工具**：在 `backend/src/tools.py` 中定义，在 `agent.py` 中导入
+- **新增工具**：在 `tools/registry.py` 中定义，在 `agent/graph.py` 中导入
 - **新增技能**：创建 `skills/<名称>/SKILL.md`（含 YAML frontmatter）
 - **新增 MCP 服务器**：在 `backend/.mcp.json` 中配置
 - **切换模型**：设置 `LLM_ADAPTER_TYPE`（anthropic/openai）和 `LLM_MODEL`

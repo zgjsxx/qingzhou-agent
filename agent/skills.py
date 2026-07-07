@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SKILLS_DIR = BACKEND_ROOT / "skills"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_ROOT = PROJECT_ROOT / "backend"
+DEFAULT_SKILLS_DIR = PROJECT_ROOT / "skills"
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ def _skills_dir() -> Path:
     if not configured:
         return DEFAULT_SKILLS_DIR
     path = Path(configured).expanduser()
-    return path.resolve() if path.is_absolute() else (BACKEND_ROOT / path).resolve()
+    return path.resolve() if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:

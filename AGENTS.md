@@ -5,7 +5,7 @@
 `xu-agent` 是一个基于 LangGraph 的个人 AI 助手。
 
 - 后端图入口：`agent/graph.py`
-- 工具定义：`backend/src/tools.py`
+- 工具定义：`tools/registry.py`
 - 智能体交互日志：`agent/logging.py`
 - LangGraph 开发配置：`backend/langgraph.json`
 - 前端聊天界面：`web/src`
@@ -37,7 +37,7 @@
 
 ## 工具
 
-当前工具列表由 `backend/src/tools.py` 中的 `ALL_TOOLS` 定义。
+当前工具列表由 `tools/registry.py` 中的 `ALL_TOOLS` 定义。
 
 ### `get_system_cpu_usage`
 
@@ -198,7 +198,7 @@ description: 用于审查代码变更，优先发现 bug、回归风险、权限
 ...
 ```
 
-后端启动时，`backend/src/skills.py` 会扫描技能目录并建立 registry。registry 只保存：
+后端启动时，`agent/skills.py` 会扫描技能目录并建立 registry。registry 只保存：
 
 - `name`
 - `description`

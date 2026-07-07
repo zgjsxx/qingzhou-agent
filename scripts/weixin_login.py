@@ -6,10 +6,9 @@ import asyncio
 import sys
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-REPO_ROOT = BACKEND_DIR.parent
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(BACKEND_DIR / "src"))
 
 from gateway.platforms.weixin import ACCOUNT_FILE, qr_login
 

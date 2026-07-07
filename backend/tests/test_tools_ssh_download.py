@@ -60,7 +60,7 @@ class SshDownloadFileToolTest(unittest.TestCase):
             fake_client = _FakeSSHClient(fake_sftp)
             target_file = Path(temp_dir) / "downloads" / "demo.txt"
 
-            with patch("tools._paramiko_connect", return_value=fake_client):
+            with patch("tools.registry._paramiko_connect", return_value=fake_client):
                 result = ssh_download_file.invoke(
                     {
                         "remote_path": "/tmp/demo.txt",

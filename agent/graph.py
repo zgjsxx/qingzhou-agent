@@ -4,12 +4,9 @@ import sys
 import os
 from pathlib import Path
 
-# Make backend/src and the repository root importable while the remaining
-# backend modules are migrated gradually.
+# Make the repository root importable when LangGraph loads this file by path.
 AGENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = AGENT_DIR.parent
-BACKEND_SRC_DIR = REPO_ROOT / "backend" / "src"
-sys.path.insert(0, str(BACKEND_SRC_DIR))
 sys.path.insert(0, str(REPO_ROOT))
 
 from langchain.agents import create_agent
@@ -25,7 +22,7 @@ from agent.mcp import load_mcp_tools
 from agent.permissions import AgentPermissionMiddleware
 from agent.prompt import build_prompt_context, get_system_prompt
 from agent.llm_config import configure_provider_env, provider_model_kwargs
-from skills import skill_catalog_for_prompt
+from agent.skills import skill_catalog_for_prompt
 from tools import ALL_TOOLS
 from gateway.platforms.botpy import start_botpy_bridge
 from gateway.platforms.discord import start_discord_bridge

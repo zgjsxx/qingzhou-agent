@@ -64,7 +64,7 @@ class SshUploadFileToolTest(unittest.TestCase):
             fake_sftp = _FakeSFTP()
             fake_client = _FakeSSHClient(fake_sftp)
 
-            with patch("tools._paramiko_connect", return_value=fake_client):
+            with patch("tools.registry._paramiko_connect", return_value=fake_client):
                 result = ssh_upload_file.invoke(
                     {
                         "local_path": str(local_file),
@@ -88,7 +88,7 @@ class SshUploadFileToolTest(unittest.TestCase):
             fake_sftp.files["/tmp/demo.txt"] = 4
             fake_client = _FakeSSHClient(fake_sftp)
 
-            with patch("tools._paramiko_connect", return_value=fake_client):
+            with patch("tools.registry._paramiko_connect", return_value=fake_client):
                 result = ssh_upload_file.invoke(
                     {
                         "local_path": str(local_file),

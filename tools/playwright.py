@@ -20,9 +20,9 @@ from urllib.parse import urlparse
 from langchain.tools import tool
 
 
-BACKEND_DIR = Path(os.path.normpath(str(Path(__file__).parent.parent)))
+BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
 if not BACKEND_DIR.is_absolute():
-    raise RuntimeError("playwright_tools.py must be loaded from an absolute module path.")
+    raise RuntimeError("tools/playwright.py must be loaded from an absolute module path.")
 DEFAULT_THREAD_ID = "__default__"
 DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_SNAPSHOT_CHARS = 12_000

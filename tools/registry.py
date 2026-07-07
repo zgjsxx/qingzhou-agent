@@ -36,7 +36,7 @@ from agent.tasks import (
     task_detail_json,
     task_summary_line,
 )
-from skills import load_skill_content
+from agent.skills import load_skill_content
 
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
@@ -1192,7 +1192,7 @@ def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
     """Find files by glob pattern inside the working directory.
 
     Args:
-        pattern: Glob pattern, for example **/*.py or backend/src/*.py.
+        pattern: Glob pattern, for example **/*.py or agent/*.py.
         cwd: Optional working directory. Empty means the backend process working directory.
         limit: Maximum number of matches to return.
     """
@@ -1774,7 +1774,7 @@ ALL_TOOLS = [
 ]
 
 if _bool_env("AGENT_PLAYWRIGHT_ENABLED"):
-    from playwright_tools import PLAYWRIGHT_TOOLS, set_thread_id_getter
+    from tools.playwright import PLAYWRIGHT_TOOLS, set_thread_id_getter
 
     set_thread_id_getter(lambda: CURRENT_TOOL_THREAD_ID.get())
     ALL_TOOLS.extend(PLAYWRIGHT_TOOLS)
