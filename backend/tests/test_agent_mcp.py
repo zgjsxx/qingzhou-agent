@@ -9,9 +9,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_mcp import load_mcp_tools
-from agent_permissions import check_tool_permission
+from agent.mcp import load_mcp_tools
+from agent.permissions import check_tool_permission
 
 
 class _McpHandler(BaseHTTPRequestHandler):

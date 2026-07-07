@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from llm_config import configure_provider_env, provider_model_kwargs
+from agent.llm_config import configure_provider_env, provider_model_kwargs
 
 
 def test_anthropic_auth_token_is_mapped_as_token(monkeypatch) -> None:

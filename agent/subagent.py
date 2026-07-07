@@ -9,9 +9,9 @@ from typing import Any
 
 from langchain.agents import create_agent
 
-from agent_context import AgentContextCompactMiddleware
-from agent_logging import AgentLoggingMiddleware, is_agent_logging_enabled
-from agent_permissions import AgentPermissionMiddleware
+from agent.context import AgentContextCompactMiddleware
+from agent.logging import AgentLoggingMiddleware, is_agent_logging_enabled
+from agent.permissions import AgentPermissionMiddleware
 from skills import skill_catalog_for_prompt
 from tools import edit_file, glob_files, load_skill, read_file, run_shell_command, write_file
 

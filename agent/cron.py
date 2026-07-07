@@ -15,8 +15,8 @@ from typing import Any
 
 from langgraph_sdk import get_client
 
-from agent_logging import log_event
-from agent_tasks import BACKEND_DIR
+from agent.logging import log_event
+from agent.tasks import BACKEND_DIR
 
 CRON_DIR = BACKEND_DIR / ".agent_cron"
 DEFAULT_STORAGE_PATH = CRON_DIR / "scheduled_tasks.json"

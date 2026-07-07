@@ -133,7 +133,7 @@
 
 ### 方向二：约束 `todo_write` 的调用时机
 
-已在 `backend/src/agent_prompt.py` 的 `PROMPT_SECTIONS["todo"]` 中补充约束：
+已在 `agent/prompt.py` 的 `PROMPT_SECTIONS["todo"]` 中补充约束：
 
 1. 简单问答不要调用 `todo_write`
 2. 如果要更新 todo，必须先更新，再写最终回复

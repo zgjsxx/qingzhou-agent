@@ -24,9 +24,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from agent_commands import handle_thread_slash_command
-from agent_config import config_section
-from agent_logging import log_event
+from agent.commands import handle_thread_slash_command
+from agent.config import config_section
+from agent.logging import log_event
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
 ILINK_APP_ID = "bot"

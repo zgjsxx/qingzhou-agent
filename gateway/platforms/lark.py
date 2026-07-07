@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent_commands import handle_thread_slash_command
-from agent_logging import log_event
+from agent.commands import handle_thread_slash_command
+from agent.logging import log_event
 
 LARK_API_BASE_URL = "https://open.feishu.cn/open-apis"
 DEFAULT_HISTORY_MAX_MESSAGES = 20

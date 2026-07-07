@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from agent_tasks import BACKEND_DIR
+from agent.tasks import BACKEND_DIR
 
 DEFAULT_DOCS_DIR = BACKEND_DIR / "data" / "rag_docs"
 DEFAULT_STORAGE_DIR = BACKEND_DIR / "data" / "rag_storage"

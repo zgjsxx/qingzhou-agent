@@ -11,8 +11,8 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
-from agent_commands import handle_thread_slash_command
-from agent_logging import log_event
+from agent.commands import handle_thread_slash_command
+from agent.logging import log_event
 
 DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 1500

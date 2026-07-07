@@ -13,7 +13,7 @@ from typing import Any, Literal
 from langchain.agents.middleware import AgentMiddleware
 from langgraph.types import interrupt
 
-from agent_logging import log_event
+from agent.logging import log_event
 from tools import reset_current_tool_thread_id, set_current_tool_thread_id
 
 PermissionBehavior = Literal["allow", "ask", "deny"]
@@ -59,7 +59,7 @@ PLAYWRIGHT_ASK_TOOLS = {
 }
 APPROVED_TOOL_CALLS: dict[str, set[str]] = {}
 APPROVED_TOOL_CALLS_LOCK = threading.Lock()
-DEFAULT_WORKDIR = Path(__file__).parent.parent
+DEFAULT_WORKDIR = Path(__file__).resolve().parents[1] / "backend"
 
 
 def _bool_env(name: str, default: bool = False) -> bool:

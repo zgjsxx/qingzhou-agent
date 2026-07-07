@@ -7,11 +7,12 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gateway.platforms import botpy as agent_botpy
 
 sys.modules["agent_botpy"] = agent_botpy
-from agent_commands import CLEAR_RESPONSE, HELP_RESPONSE
+from agent.commands import CLEAR_RESPONSE, HELP_RESPONSE
 
 
 class AgentBotpyTest(unittest.TestCase):

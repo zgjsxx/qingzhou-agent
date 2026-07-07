@@ -4,9 +4,9 @@
 
 `xu-agent` 是一个基于 LangGraph 的个人 AI 助手。
 
-- 后端图入口：`backend/src/agent.py`
+- 后端图入口：`agent/graph.py`
 - 工具定义：`backend/src/tools.py`
-- 智能体交互日志：`backend/src/agent_logging.py`
+- 智能体交互日志：`agent/logging.py`
 - LangGraph 开发配置：`backend/langgraph.json`
 - 前端聊天界面：`web/src`
 
@@ -23,7 +23,7 @@
 - `LLM_API_KEY`：API 密钥
 - `LLM_BASE_URL`：供应商基础 URL
 
-`backend/src/agent.py` 会把项目级的 `LLM_*` 变量映射为 LangChain 期望的
+`agent/graph.py` 会把项目级的 `LLM_*` 变量映射为 LangChain 期望的
 供应商专用环境变量：
 
 - `anthropic` -> `ANTHROPIC_API_KEY`、`ANTHROPIC_API_URL`

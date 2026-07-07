@@ -4,8 +4,9 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import agent_rag
+import agent.rag as agent_rag
 
 
 class AgentRagTest(unittest.TestCase):
@@ -64,7 +65,7 @@ class AgentRagTest(unittest.TestCase):
         self.assertEqual(embedding._api_key, "dashscope-api-key")
 
     def test_empty_query_returns_without_loading_index(self):
-        with patch("agent_rag._load_index") as load_index:
+        with patch("agent.rag._load_index") as load_index:
             result = agent_rag.rag_search("   ")
 
         self.assertEqual(result, "RAG query cannot be empty.")

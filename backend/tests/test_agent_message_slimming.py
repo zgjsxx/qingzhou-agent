@@ -4,6 +4,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from agent_message_slimming import SLIMMED_MARKER, slim_message
 

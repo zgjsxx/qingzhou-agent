@@ -4,8 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_commands import (
+from agent.commands import (
     COMPACT_COMMAND,
     HELP_RESPONSE,
     clear_context_update,

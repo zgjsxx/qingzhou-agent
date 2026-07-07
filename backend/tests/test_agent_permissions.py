@@ -5,8 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_permissions import AgentPermissionMiddleware, check_tool_permission
+from agent.permissions import AgentPermissionMiddleware, check_tool_permission
 
 
 class AgentPermissionMiddlewareTest(unittest.TestCase):
@@ -19,7 +20,7 @@ class AgentPermissionMiddlewareTest(unittest.TestCase):
             },
         )
 
-        with patch("agent_permissions.interrupt") as interrupt:
+        with patch("agent.permissions.interrupt") as interrupt:
             result = middleware._check_request(request)
 
         self.assertIsInstance(result, str)

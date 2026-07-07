@@ -5,8 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent_commands import AgentCommandMiddleware, CLEAR_RESPONSE, HELP_RESPONSE
+from agent.commands import AgentCommandMiddleware, CLEAR_RESPONSE, HELP_RESPONSE
 from langchain_core.messages import HumanMessage
 
 
@@ -51,7 +52,7 @@ class AgentContextManualCompactTest(unittest.TestCase):
             messages=messages,
         )
 
-        with patch("agent_context._summarize_messages", return_value="Summary:\n保留 SSH 调试结论") as summarize:
+        with patch("agent.context._summarize_messages", return_value="Summary:\n保留 SSH 调试结论") as summarize:
             response = AgentCommandMiddleware().wrap_model_call(
                 request,
                 lambda _request: self.fail("/compact should not be sent to the main model"),

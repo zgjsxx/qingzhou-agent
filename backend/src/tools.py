@@ -19,14 +19,14 @@ from pathlib import Path
 
 from langchain.tools import tool
 
-from agent_cron import cancel_job as cancel_cron_job
-from agent_cron import is_cron_enabled
-from agent_cron import list_jobs as list_cron_jobs
-from agent_cron import schedule_job as schedule_cron_job
-from agent_config import config_int, config_str, ssh_host_entry
-from agent_context import MANUAL_COMPACT_MARKER
-from agent_memory import write_memory_file
-from agent_tasks import (
+from agent.cron import cancel_job as cancel_cron_job
+from agent.cron import is_cron_enabled
+from agent.cron import list_jobs as list_cron_jobs
+from agent.cron import schedule_job as schedule_cron_job
+from agent.config import config_int, config_str, ssh_host_entry
+from agent.context import MANUAL_COMPACT_MARKER
+from agent.memory import write_memory_file
+from agent.tasks import (
     BACKEND_DIR,
     claim_persistent_task,
     complete_persistent_task,
@@ -879,7 +879,7 @@ def rag_rebuild_index(data_dir: str = "") -> str:
     Args:
         data_dir: Optional document directory. Defaults to RAG_DOCS_DIR or backend/data/rag_docs.
     """
-    from agent_rag import rag_rebuild_index as rebuild_index
+    from agent.rag import rag_rebuild_index as rebuild_index
 
     return rebuild_index(data_dir=data_dir)
 
@@ -892,7 +892,7 @@ def rag_search(query: str, top_k: int = 5) -> str:
         query: Search question or keywords.
         top_k: Number of retrieved chunks to return.
     """
-    from agent_rag import rag_search as search_index
+    from agent.rag import rag_search as search_index
 
     return search_index(query=query, top_k=top_k)
 
@@ -909,7 +909,7 @@ def run_subagent(description: str, cwd: str = "", max_steps: int | None = None) 
         cwd: Optional working directory hint for file and shell tools.
         max_steps: Optional maximum subagent reasoning/tool steps.
     """
-    from agent_subagent import spawn_subagent
+    from agent.subagent import spawn_subagent
 
     return spawn_subagent(description=description, cwd=cwd, max_steps=max_steps)
 

@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = BACKEND_DIR.parent
 SRC_DIR = BACKEND_DIR / "src"
 
 
@@ -54,8 +55,9 @@ def main() -> int:
     args = _parse_args()
     _load_env_file(Path(args.env_file).expanduser())
     sys.path.insert(0, str(SRC_DIR))
+    sys.path.insert(0, str(REPO_ROOT))
 
-    from agent_rag import rag_rebuild_index
+    from agent.rag import rag_rebuild_index
 
     print("Rebuilding RAG index...", flush=True)
     result = rag_rebuild_index(data_dir=args.data_dir)

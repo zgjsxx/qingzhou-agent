@@ -33,10 +33,10 @@ from langchain_core.messages import (
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
-from agent_config import config_str
-from agent_logging import log_event
-from agent_prompt import BASE_COMPACT_PROMPT, NO_TOOLS_PREAMBLE, NO_TOOLS_TRAILER
-from llm_config import configure_provider_env, provider_model_kwargs
+from agent.config import config_str
+from agent.logging import log_event
+from agent.prompt import BASE_COMPACT_PROMPT, NO_TOOLS_PREAMBLE, NO_TOOLS_TRAILER
+from agent.llm_config import configure_provider_env, provider_model_kwargs
 
 MANUAL_COMPACT_MARKER = "[compact requested]"
 DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000

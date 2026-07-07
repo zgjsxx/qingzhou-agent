@@ -12,15 +12,16 @@ BACKEND_DIR = Path(__file__).parent.parent
 SRC_DIR = BACKEND_DIR / "src"
 
 sys.path.insert(0, str(SRC_DIR))
+sys.path.insert(0, str(BACKEND_DIR.parent))
 
 import playwright_tools
-from agent_permissions import check_tool_permission
+from agent.permissions import check_tool_permission
 
 
 def _tool_names_with_env(enabled: bool) -> set[str]:
     env = os.environ.copy()
     env["AGENT_PLAYWRIGHT_ENABLED"] = "true" if enabled else "false"
-    env["PYTHONPATH"] = str(SRC_DIR)
+    env["PYTHONPATH"] = f"{BACKEND_DIR.parent}{os.pathsep}{SRC_DIR}"
     script = (
         "from tools import ALL_TOOLS; "
         "print(','.join(sorted(getattr(tool, 'name', '') for tool in ALL_TOOLS)))"

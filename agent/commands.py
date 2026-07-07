@@ -22,8 +22,8 @@ from langchain_core.messages import AIMessage, RemoveMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
-from agent_context import manual_compact_state, manual_acompact_state, _compact_failure_update
-from agent_logging import log_event
+from agent.context import manual_compact_state, manual_acompact_state, _compact_failure_update
+from agent.logging import log_event
 
 # ---------------------------------------------------------------------------
 # Command constants & responses

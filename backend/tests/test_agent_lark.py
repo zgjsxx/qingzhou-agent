@@ -7,11 +7,12 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gateway.platforms import lark as agent_lark
 
 sys.modules["agent_lark"] = agent_lark
-from agent_commands import CLEAR_RESPONSE, HELP_RESPONSE
+from agent.commands import CLEAR_RESPONSE, HELP_RESPONSE
 
 
 class AgentLarkTest(unittest.TestCase):
