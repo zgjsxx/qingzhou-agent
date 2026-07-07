@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import logging.handlers
 import os
 import re
 import sys
 import threading
 import traceback
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from agent.commands import handle_thread_slash_command
 from agent.logging import log_event
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+BOTPY_LOG_DIR = ROOT_DIR / ".runtime" / "logs"
 
 DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 1500
@@ -331,6 +337,15 @@ class BotpyBridgeClient:
             import botpy
         except ImportError as exc:
             raise RuntimeError("QQ bot mode requires: pip install qq-botpy") from exc
+
+        BOTPY_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        botpy.configure_logging(ext_handlers=[{
+            "handler": logging.handlers.TimedRotatingFileHandler,
+            "filename": str(BOTPY_LOG_DIR / "%(name)s.log"),
+            "when": "D",
+            "backupCount": 7,
+            "encoding": "utf-8",
+        }])
 
         intents = botpy.Intents(
             public_guild_messages=_bool_env("BOTPY_PUBLIC_GUILD_MESSAGES", True),
