@@ -21,8 +21,13 @@ const geist = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Agent Chat",
-  description: "Agent Chat UX by LangChain",
+  title: "qingzhou-agent",
+  description: "qingzhou-agent",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/qingzhou-logo.png",
+  },
 };
 
 export default function RootLayout({

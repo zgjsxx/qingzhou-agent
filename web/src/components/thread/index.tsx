@@ -12,7 +12,7 @@ import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
 } from "@/lib/ensure-tool-responses";
-import { LangGraphLogoSVG } from "../icons/langgraph";
+import { QingzhouLogo } from "../icons/qingzhou";
 import { TooltipIconButton } from "./tooltip-icon-button";
 import {
   ArrowDown,
@@ -341,12 +341,12 @@ export function Thread() {
                     damping: 30,
                   }}
                 >
-                  <LangGraphLogoSVG
+                  <QingzhouLogo
                     width={32}
                     height={32}
                   />
                   <span className="text-xl font-semibold tracking-tight">
-                    Agent Chat
+                    qingzhou-agent
                   </span>
                 </motion.button>
               </div>
@@ -445,10 +445,14 @@ export function Thread() {
               footer={
                 <div className="sticky bottom-0 flex flex-col items-center gap-8 bg-white">
                   {!chatStarted && (
-                    <div className="flex items-center gap-3">
-                      <LangGraphLogoSVG className="h-8 flex-shrink-0" />
+                    <div className="flex items-center gap-4">
+                      <QingzhouLogo
+                        width={44}
+                        height={44}
+                        className="h-11 w-11 flex-shrink-0"
+                      />
                       <h1 className="text-2xl font-semibold tracking-tight">
-                        Agent Chat
+                        qingzhou-agent
                       </h1>
                     </div>
                   )}

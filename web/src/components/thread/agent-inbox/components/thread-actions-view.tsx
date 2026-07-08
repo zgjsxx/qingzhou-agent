@@ -155,7 +155,8 @@ export function ThreadActionsView({
   const handleOpenInStudio = () => {
     if (!apiUrl) {
       toast.error("Error", {
-        description: "Please set the LangGraph deployment URL in settings.",
+        description:
+          "Please set the qingzhou-agent deployment URL in settings.",
         duration: 5000,
         richColors: true,
         closeButton: true,

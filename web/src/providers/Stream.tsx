@@ -18,7 +18,7 @@ import {
 import { useQueryState } from "nuqs";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { LangGraphLogoSVG } from "@/components/icons/langgraph";
+import { QingzhouLogo } from "@/components/icons/qingzhou";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ArrowRight } from "lucide-react";
@@ -178,11 +178,12 @@ const StreamSession = ({
     let cancelled = false;
     waitForGraphStatus(apiUrl, apiKey, authScheme).then((ok) => {
       if (!ok && !cancelled) {
-        toast.error("Failed to connect to LangGraph server", {
+        toast.error("Failed to connect to qingzhou-agent backend", {
           description: () => (
             <p>
-              Please ensure your graph is running at <code>{apiUrl}</code> and
-              your API key is correctly set (if connecting to a deployed graph).
+              Please ensure qingzhou-agent is running at <code>{apiUrl}</code>{" "}
+              and your API key is correctly set (if connecting to a deployed
+              graph).
             </p>
           ),
           duration: 10000,
@@ -258,14 +259,18 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
         <div className="animate-in fade-in-0 zoom-in-95 bg-background flex max-w-3xl flex-col rounded-lg border shadow-lg">
           <div className="mt-14 flex flex-col gap-2 border-b p-6">
             <div className="flex flex-col items-start gap-2">
-              <LangGraphLogoSVG className="h-7" />
+              <QingzhouLogo
+                width={28}
+                height={28}
+                className="h-7 w-7"
+              />
               <h1 className="text-xl font-semibold tracking-tight">
-                Agent Chat
+                qingzhou-agent
               </h1>
             </div>
             <p className="text-muted-foreground">
-              Welcome to Agent Chat! Before you get started, you need to enter
-              the URL of the deployment and the assistant / graph ID.
+              Welcome to qingzhou-agent. Before you get started, you need to
+              enter the URL of the deployment and the assistant / graph ID.
             </p>
           </div>
           <form
@@ -292,8 +297,8 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
                 Deployment URL<span className="text-rose-500">*</span>
               </Label>
               <p className="text-muted-foreground text-sm">
-                This is the URL of your LangGraph deployment. Can be a local, or
-                production deployment.
+                This is the URL of your qingzhou-agent deployment. Can be a
+                local, or production deployment.
               </p>
               <Input
                 id="apiUrl"
@@ -325,10 +330,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
             <div className="flex flex-col gap-2">
               <Label htmlFor="apiKey">LangSmith API Key</Label>
               <p className="text-muted-foreground text-sm">
-                This is <strong>NOT</strong> required if using a local LangGraph
-                server. This value is stored in your browser's local storage and
-                is only used to authenticate requests sent to your LangGraph
-                server.
+                This is <strong>NOT</strong> required if using a local
+                qingzhou-agent server. This value is stored in your browser's
+                local storage and is only used to authenticate requests sent to
+                your qingzhou-agent server.
               </p>
               <PasswordInput
                 id="apiKey"

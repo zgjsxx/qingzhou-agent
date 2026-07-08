@@ -1,6 +1,6 @@
-# Agent Chat UI
+# qingzhou-agent Web UI
 
-Agent Chat UI is a Next.js application which enables chatting with any LangGraph server with a `messages` key through a chat interface.
+qingzhou-agent Web UI is a Next.js application which enables chatting with any LangGraph server with a `messages` key through a chat interface.
 
 > [!NOTE]
 > 🎥 Watch the video setup guide [here](https://youtu.be/lInrwVnZ83o).
@@ -75,7 +75,7 @@ When these environment variables are set, the application will use them instead 
 
 ## Hiding Messages in the Chat
 
-You can control the visibility of messages within the Agent Chat UI in two main ways:
+You can control the visibility of messages within the qingzhou-agent Web UI in two main ways:
 
 **1. Prevent Live Streaming:**
 
@@ -130,7 +130,7 @@ This approach guarantees the message remains completely hidden from the user int
 
 ## Rendering Artifacts
 
-The Agent Chat UI supports rendering artifacts in the chat. Artifacts are rendered in a side panel to the right of the chat. To render an artifact, you can obtain the artifact context from the `thread.meta.artifact` field. Here's a sample utility hook for obtaining the artifact context:
+The qingzhou-agent Web UI supports rendering artifacts in the chat. Artifacts are rendered in a side panel to the right of the chat. To render an artifact, you can obtain the artifact context from the `thread.meta.artifact` field. Here's a sample utility hook for obtaining the artifact context:
 
 ```tsx
 export function useArtifact<TContext = Record<string, unknown>>() {
@@ -191,15 +191,15 @@ export function Writer(props: {
 
 ## Going to Production
 
-Once you're ready to go to production, you'll need to update how you connect, and authenticate requests to your deployment. By default, the Agent Chat UI is setup for local development, and connects to your LangGraph server directly from the client. This is not possible if you want to go to production, because it requires every user to have their own LangSmith API key, and set the LangGraph configuration themselves.
+Once you're ready to go to production, you'll need to update how you connect, and authenticate requests to your deployment. By default, the qingzhou-agent Web UI is setup for local development, and connects to your LangGraph server directly from the client. This is not possible if you want to go to production, because it requires every user to have their own LangSmith API key, and set the LangGraph configuration themselves.
 
 ### Production Setup
 
-To productionize the Agent Chat UI, you'll need to pick one of two ways to authenticate requests to your LangGraph server. Below, I'll outline the two options:
+To productionize the qingzhou-agent Web UI, you'll need to pick one of two ways to authenticate requests to your LangGraph server. Below, I'll outline the two options:
 
 ### Quickstart - API Passthrough
 
-The quickest way to productionize the Agent Chat UI is to use the [API Passthrough](https://github.com/bracesproul/langgraph-nextjs-api-passthrough) package ([NPM link here](https://www.npmjs.com/package/langgraph-nextjs-api-passthrough)). This package provides a simple way to proxy requests to your LangGraph server, and handle authentication for you.
+The quickest way to productionize the qingzhou-agent Web UI is to use the [API Passthrough](https://github.com/bracesproul/langgraph-nextjs-api-passthrough) package ([NPM link here](https://www.npmjs.com/package/langgraph-nextjs-api-passthrough)). This package provides a simple way to proxy requests to your LangGraph server, and handle authentication for you.
 
 This repository already contains all of the code you need to start using this method. The only configuration you need to do is set the proper environment variables.
 
@@ -217,7 +217,7 @@ Let's cover what each of these environment variables does:
 
 - `NEXT_PUBLIC_ASSISTANT_ID`: The ID of the assistant you want to use when fetching, and submitting runs via the chat interface. This still needs the `NEXT_PUBLIC_` prefix, since it's not a secret, and we use it on the client when submitting requests.
 - `LANGGRAPH_API_URL`: The URL of your LangGraph server. This should be the production deployment URL.
-- `NEXT_PUBLIC_API_URL`: The URL of your website + `/api`. This is how you connect to the API proxy. For the [Agent Chat demo](https://agentchat.vercel.app), this would be set as `https://agentchat.vercel.app/api`. You should set this to whatever your production URL is.
+- `NEXT_PUBLIC_API_URL`: The URL of your website + `/api`. This is how you connect to the API proxy. For the [qingzhou-agent demo](https://agentchat.vercel.app), this would be set as `https://agentchat.vercel.app/api`. You should set this to whatever your production URL is.
 - `LANGSMITH_API_KEY`: Your LangSmith API key to use when authenticating requests sent to LangGraph servers. Once again, do _not_ prefix this with `NEXT_PUBLIC_` since it's a secret, and is only used on the server when the API proxy injects it into the request to your deployed LangGraph server.
 
 For in depth documentation, consult the [LangGraph Next.js API Passthrough](https://www.npmjs.com/package/langgraph-nextjs-api-passthrough) docs.
@@ -228,7 +228,7 @@ Custom authentication in your LangGraph deployment is an advanced, and more robu
 
 To set this up in your LangGraph deployment, please read the LangGraph custom authentication docs for [Python](https://langchain-ai.github.io/langgraph/tutorials/auth/getting_started/), and [TypeScript here](https://langchain-ai.github.io/langgraphjs/how-tos/auth/custom_auth/).
 
-Once you've set it up on your deployment, you should make the following changes to the Agent Chat UI:
+Once you've set it up on your deployment, you should make the following changes to the qingzhou-agent Web UI:
 
 1. Configure any additional API requests to fetch the authentication token from your LangGraph deployment which will be used to authenticate requests from the client.
 2. Set the `NEXT_PUBLIC_API_URL` environment variable to your production LangGraph deployment URL.
