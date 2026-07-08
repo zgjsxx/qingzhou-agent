@@ -134,6 +134,35 @@ class McpToolTest(unittest.TestCase):
         self.assertIn("tools/call", methods)
         self.assertEqual(_McpHandler.calls[-1]["params"]["name"], "search-docs")
 
+    def test_load_http_mcp_tool_from_unified_config(self):
+        url = f"http://127.0.0.1:{self.server.server_port}/mcp"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "xu-agent.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "mcp": {
+                            "servers": {
+                                "docs.server": {
+                                    "type": "http",
+                                    "url": url,
+                                    "headers": {"Authorization": "Bearer ${MCP_TEST_TOKEN}"},
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"AGENT_MCP_CONFIG": "", "MCP_TEST_TOKEN": "secret"},
+                clear=False,
+            ), patch("agent.config.CONFIG_FILE", config_path), patch("agent.mcp.CONFIG_FILE", config_path):
+                tools = load_mcp_tools()
+
+        self.assertEqual([tool.name for tool in tools], ["mcp__docs_server__search-docs"])
+
     def test_mcp_tools_require_approval(self):
         decision = check_tool_permission("mcp__github__create_issue", {"title": "x"})
         self.assertEqual(decision.behavior, "ask")

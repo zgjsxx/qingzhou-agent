@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const configPath = path.join(repoRoot, ".agent_config.json");
+const configDir = path.join(repoRoot, "config");
+const configPath = path.join(configDir, "xu-agent.json");
 
 const defaultHost = {
   host: "",
@@ -75,14 +76,23 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
+  let existing: Record<string, unknown> = {};
+  try {
+    const raw = await readFile(configPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    existing = parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    existing = {};
+  }
   const nextConfig = {
+    ...existing,
     llm: { ...defaultConfig.llm, ...(body.llm ?? {}) },
     ssh: migrateSsh(body.ssh),
     weixin: { ...defaultConfig.weixin, ...(body.weixin ?? {}) },
     telegram: { ...defaultConfig.telegram, ...(body.telegram ?? {}) },
     discord: { ...defaultConfig.discord, ...(body.discord ?? {}) },
   };
-  await mkdir(repoRoot, { recursive: true });
+  await mkdir(configDir, { recursive: true });
   await writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf-8");
   return NextResponse.json(nextConfig);
 }

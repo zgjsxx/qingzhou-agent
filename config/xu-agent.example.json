@@ -1,0 +1,50 @@
+{
+  "llm": {
+    "adapterType": "anthropic",
+    "model": "glm-5.1",
+    "apiKey": "",
+    "baseUrl": ""
+  },
+  "ssh": [
+    {
+      "host": "",
+      "user": "",
+      "port": 22,
+      "keyFile": "",
+      "privateKey": "",
+      "password": "",
+      "extraArgs": ""
+    }
+  ],
+  "weixin": {
+    "enabled": false
+  },
+  "telegram": {
+    "enabled": false,
+    "botToken": "",
+    "allowedUsers": "",
+    "requireMention": true,
+    "mergeWaitSeconds": 3
+  },
+  "discord": {
+    "enabled": false,
+    "botToken": "",
+    "allowedUsers": "",
+    "requireMention": true,
+    "mergeWaitSeconds": 3,
+    "proxy": ""
+  },
+  "mcp": {
+    "servers": {
+      "tavily": {
+        "enabled": false,
+        "type": "http",
+        "url": "https://mcp.tavily.com/mcp/",
+        "headers": {
+          "Authorization": "Bearer ${TAVILY_API_KEY}",
+          "DEFAULT_PARAMETERS": "{\"max_results\":8,\"search_depth\":\"basic\"}"
+        }
+      }
+    }
+  }
+}

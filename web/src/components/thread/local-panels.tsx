@@ -440,7 +440,7 @@ function PluginsPage(props: {
         <CardHeader>
           <CardTitle>No plugins found</CardTitle>
           <CardDescription>
-            Add MCP servers in .mcp.json.
+            Add MCP servers in config/xu-agent.json.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -454,7 +454,7 @@ function PluginsPage(props: {
           <CardTitle>Plugin Control</CardTitle>
           <CardDescription>
             You can enable or disable configured MCP plugins here. Changes are
-            written to <code>.mcp.json</code> and take effect after the
+            written to <code>config/xu-agent.json</code> and take effect after the
             backend restarts.
           </CardDescription>
         </CardHeader>
@@ -527,7 +527,7 @@ function PluginsPage(props: {
                 {!plugin.configured ? (
                   <p className="text-muted-foreground text-xs leading-5">
                     Example plugins are read-only. Add them to{" "}
-                    <code>.mcp.json</code> before toggling them here.
+                    <code>config/xu-agent.json</code> before toggling them here.
                   </p>
                 ) : null}
               </CardContent>
@@ -600,7 +600,7 @@ function TavilyPluginCard(props: {
             autoComplete="off"
           />
           <p className="text-muted-foreground text-xs">
-            Stored only in <code>.mcp.json</code> and never returned by
+            Stored only in <code>config/xu-agent.json</code> and never returned by
             the configuration API.
           </p>
         </div>

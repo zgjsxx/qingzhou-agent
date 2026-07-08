@@ -1,4 +1,4 @@
-"""Local runtime configuration loaded from backend/.agent_config.json."""
+"""Local runtime configuration loaded from config/xu-agent.json."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-CONFIG_FILE = ROOT_DIR / ".agent_config.json"
+CONFIG_DIR = ROOT_DIR / "config"
+CONFIG_FILE = CONFIG_DIR / "xu-agent.json"
 
 
 def load_agent_config() -> dict[str, Any]:

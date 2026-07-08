@@ -13,6 +13,7 @@ from typing import Any
 
 from langchain_core.tools import StructuredTool
 
+from agent.config import CONFIG_FILE, load_agent_config
 from agent.logging import log_event
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -60,11 +61,16 @@ def _candidate_config_paths() -> list[Path]:
     if configured:
         path = Path(configured).expanduser()
         paths.append(path if path.is_absolute() else PROJECT_ROOT / path)
-    paths.append(PROJECT_ROOT / ".mcp.json")
     return paths
 
 
 def _load_config_file() -> tuple[Path | None, dict[str, Any]]:
+    """Load MCP config.
+
+    The normal source is the ``mcp`` section in ``config/xu-agent.json``. The
+    ``AGENT_MCP_CONFIG`` environment variable remains as an explicit debug/test
+    override and is not used as an automatic compatibility fallback.
+    """
     for path in _candidate_config_paths():
         if not path.exists():
             continue
@@ -75,7 +81,10 @@ def _load_config_file() -> tuple[Path | None, dict[str, Any]]:
         except (OSError, json.JSONDecodeError) as exc:
             log_event("mcp.config_error", path=str(path), error=repr(exc))
             return path, {}
-    return None, {}
+    raw = load_agent_config().get("mcp", {})
+    if isinstance(raw, dict):
+        return CONFIG_FILE, _expand_env(raw)
+    return CONFIG_FILE, {}
 
 
 def _server_configs(raw: dict[str, Any]) -> list[McpHttpServerConfig]:

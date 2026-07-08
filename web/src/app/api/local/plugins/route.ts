@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const repoRoot = path.resolve(process.cwd(), "..");
-const configPath = path.join(repoRoot, ".mcp.json");
-const exampleConfigPath = path.join(repoRoot, ".mcp.example.json");
+const configDir = path.join(repoRoot, "config");
+const configPath = path.join(configDir, "xu-agent.json");
+const exampleConfigPath = path.join(configDir, "xu-agent.example.json");
 
 type Plugin = {
   name: string;
@@ -30,10 +31,14 @@ async function readJson(filePath: string) {
 
 async function readConfiguredJson() {
   const raw = await readJson(configPath);
-  if (!raw || typeof raw !== "object") {
+  if (!raw || typeof raw !== "object" || !("mcp" in raw)) {
     throw new Error("Invalid MCP config");
   }
-  return raw as { servers?: Record<string, unknown> };
+  const mcp = (raw as { mcp?: unknown }).mcp;
+  if (!mcp || typeof mcp !== "object") {
+    throw new Error("Invalid MCP config");
+  }
+  return mcp as { servers?: Record<string, unknown> };
 }
 
 async function readConfiguredJsonOrDefault() {
@@ -42,6 +47,26 @@ async function readConfiguredJsonOrDefault() {
   } catch {
     return { servers: {} as Record<string, unknown> };
   }
+}
+
+async function readUnifiedJsonOrDefault() {
+  try {
+    const raw = await readJson(configPath);
+    return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeMcpConfig(mcpConfig: { servers?: Record<string, unknown> }) {
+  const unified = await readUnifiedJsonOrDefault();
+  unified.mcp = mcpConfig;
+  await mkdir(configDir, { recursive: true });
+  await writeFile(
+    configPath,
+    `${JSON.stringify(unified, null, 2)}\n`,
+    "utf-8",
+  );
 }
 
 function parseDefaultParameters(value: unknown): Plugin["defaultParameters"] {
@@ -96,14 +121,20 @@ function toPlugins(raw: unknown, configured: boolean): Plugin[] {
 export async function GET() {
   let configured: Plugin[] = [];
   try {
-    configured = toPlugins(await readJson(configPath), true);
+    configured = toPlugins(await readConfiguredJson(), true);
   } catch {
     configured = [];
   }
 
   let examples: Plugin[] = [];
   try {
-    examples = toPlugins(await readJson(exampleConfigPath), false);
+    const example = await readJson(exampleConfigPath);
+    examples = toPlugins(
+      example && typeof example === "object" && "mcp" in example
+        ? (example as { mcp?: unknown }).mcp
+        : example,
+      false,
+    );
   } catch {
     examples = [];
   }
@@ -201,11 +232,7 @@ export async function POST(request: Request) {
         },
       };
       config.servers = servers;
-      await writeFile(
-        configPath,
-        `${JSON.stringify(config, null, 2)}\n`,
-        "utf-8",
-      );
+      await writeMcpConfig(config);
       return NextResponse.json({
         ok: true,
         plugin:
@@ -236,11 +263,7 @@ export async function POST(request: Request) {
       enabled,
     };
 
-    await writeFile(
-      configPath,
-      `${JSON.stringify(config, null, 2)}\n`,
-      "utf-8",
-    );
+    await writeMcpConfig(config);
 
     return NextResponse.json({
       ok: true,

@@ -4,6 +4,7 @@ __pycache__/
 .env
 .mcp.json
 .agent_config.json
+config/xu-agent.json
 logs/
 .tasks/
 .agent_outputs/
