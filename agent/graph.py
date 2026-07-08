@@ -36,6 +36,12 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", config_str("llm", "apiKey", "")).strip()
 LLM_AUTH_TOKEN = os.getenv("LLM_AUTH_TOKEN", os.getenv("ANTHROPIC_AUTH_TOKEN", "")).strip()
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", config_str("llm", "baseUrl", "")).strip()
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").strip()
+QINGZHOU_CLI_MODE = os.getenv("QINGZHOU_CLI", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def configure_llm_provider_env() -> None:
@@ -89,9 +95,10 @@ graph = create_agent(
     system_prompt=get_system_prompt(PROMPT_CONTEXT),
 )
 
-start_cron_scheduler()
-start_lark_ws_bridge(graph)
-start_botpy_bridge(graph)
-start_weixin_bridge(graph)
-start_telegram_bridge(graph)
-start_discord_bridge(graph)
+if not QINGZHOU_CLI_MODE:
+    start_cron_scheduler()
+    start_lark_ws_bridge(graph)
+    start_botpy_bridge(graph)
+    start_weixin_bridge(graph)
+    start_telegram_bridge(graph)
+    start_discord_bridge(graph)

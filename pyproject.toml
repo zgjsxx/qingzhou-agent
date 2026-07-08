@@ -15,5 +15,8 @@ dependencies = [
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
+[project.scripts]
+qingzhou = "qingzhou_cli.main:main"
+
 [tool.setuptools.packages.find]
-include = ["src*"]
+include = ["agent*", "gateway*", "qingzhou_cli*", "tools*"]
