@@ -149,6 +149,53 @@ class AgentLarkTest(unittest.TestCase):
 
         token_request.assert_called_once_with("app", "secret")
         self.assertEqual(post_json.call_count, 2)
+        first_payload = post_json.call_args_list[0].args[2]
+        self.assertEqual(first_payload["msg_type"], "interactive")
+        card = json.loads(first_payload["content"])
+        self.assertEqual(card["schema"], "2.0")
+        self.assertEqual(card["body"]["elements"][0]["tag"], "markdown")
+        self.assertEqual(card["body"]["elements"][0]["content"], "hello")
+
+    def test_send_lark_text_falls_back_when_markdown_card_fails(self):
+        with (
+            patch("agent_lark._get_tenant_access_token", return_value="token"),
+            patch(
+                "agent_lark._post_lark_json",
+                side_effect=[{"code": 230001}, {"code": 0}],
+            ) as post_json,
+        ):
+            agent_lark.send_lark_text(
+                "oc_1",
+                "**hello**",
+                app_id="app",
+                app_secret="secret",
+            )
+
+        self.assertEqual(post_json.call_count, 2)
+        card_payload = post_json.call_args_list[0].args[2]
+        text_payload = post_json.call_args_list[1].args[2]
+        self.assertEqual(card_payload["msg_type"], "interactive")
+        self.assertEqual(text_payload["msg_type"], "text")
+        self.assertEqual(
+            json.loads(text_payload["content"]),
+            {"text": "**hello**"},
+        )
+
+    def test_send_lark_text_can_disable_markdown_cards(self):
+        with (
+            patch.dict("os.environ", {"LARK_MARKDOWN_ENABLED": "false"}),
+            patch("agent_lark._get_tenant_access_token", return_value="token"),
+            patch("agent_lark._post_lark_json", return_value={"code": 0}) as post_json,
+        ):
+            agent_lark.send_lark_text(
+                "oc_1",
+                "plain",
+                app_id="app",
+                app_secret="secret",
+            )
+
+        payload = post_json.call_args.args[2]
+        self.assertEqual(payload["msg_type"], "text")
 
     def test_bridge_handle_event_submits_to_buffer(self):
         """handle_event should add event to the merge buffer, not process directly."""

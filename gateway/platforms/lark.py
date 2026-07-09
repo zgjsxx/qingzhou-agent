@@ -588,20 +588,83 @@ def _reply_chunks(text: str) -> list[str]:
     return [text[index : index + limit] for index in range(0, len(text), limit)]
 
 
+def _lark_markdown_card(content: str) -> dict[str, Any]:
+    """Build a Feishu Card JSON 2.0 payload for an Agent Markdown reply."""
+    return {
+        "schema": "2.0",
+        "config": {
+            "update_multi": True,
+            "style": {
+                "text_size": {
+                    "normal_v2": {
+                        "default": "normal",
+                        "pc": "normal",
+                        "mobile": "normal",
+                    }
+                }
+            },
+        },
+        "body": {
+            "direction": "vertical",
+            "padding": "12px 12px 12px 12px",
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": content,
+                    "text_align": "left",
+                    "text_size": "normal_v2",
+                    "margin": "0px 0px 0px 0px",
+                }
+            ],
+        },
+    }
+
+
+def _send_lark_message(
+    chat_id: str,
+    token: str,
+    *,
+    msg_type: str,
+    content: dict[str, Any],
+) -> dict[str, Any]:
+    return _post_lark_json(
+        "/im/v1/messages",
+        token,
+        {
+            "receive_id": chat_id,
+            "msg_type": msg_type,
+            "content": json.dumps(content, ensure_ascii=False),
+        },
+        query={"receive_id_type": "chat_id"},
+    )
+
+
 def send_lark_text(chat_id: str, text: str, *, app_id: str, app_secret: str) -> None:
     token = _get_tenant_access_token(app_id, app_secret)
     for chunk in _reply_chunks(text):
-        payload = {
-            "receive_id": chat_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": chunk}, ensure_ascii=False),
-        }
-        response = _post_lark_json(
-            "/im/v1/messages",
-            token,
-            payload,
-            query={"receive_id_type": "chat_id"},
-        )
+        response: dict[str, Any] | None = None
+        card_error: Exception | None = None
+        if _bool_env("LARK_MARKDOWN_ENABLED", True):
+            try:
+                response = _send_lark_message(
+                    chat_id,
+                    token,
+                    msg_type="interactive",
+                    content=_lark_markdown_card(chunk),
+                )
+                if int(response.get("code") or 0) != 0:
+                    raise RuntimeError(f"Lark send card failed: {response}")
+            except Exception as exc:
+                card_error = exc
+                log_event("lark.markdown_fallback", chat_id=chat_id, error=repr(exc))
+
+        if response is None or card_error is not None:
+            response = _send_lark_message(
+                chat_id,
+                token,
+                msg_type="text",
+                content={"text": chunk},
+            )
         if int(response.get("code") or 0) != 0:
             raise RuntimeError(f"Lark send message failed: {response}")
 
