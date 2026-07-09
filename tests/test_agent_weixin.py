@@ -17,6 +17,29 @@ from agent.commands import HELP_RESPONSE
 
 
 class AgentWeixinTest(unittest.TestCase):
+    def test_migrate_legacy_data(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            legacy_dir = root / ".weixin"
+            data_dir = root / "config" / "weixin"
+            legacy_dir.mkdir()
+            (legacy_dir / "account.json").write_text(
+                '{"token":"secret"}',
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(agent_weixin, "LEGACY_WEIXIN_DATA_DIR", legacy_dir),
+                patch.object(agent_weixin, "WEIXIN_DATA_DIR", data_dir),
+            ):
+                agent_weixin.migrate_legacy_data()
+
+            self.assertFalse(legacy_dir.exists())
+            self.assertEqual(
+                (data_dir / "account.json").read_text(encoding="utf-8"),
+                '{"token":"secret"}',
+            )
+
     def test_headers_include_ilink_authentication(self):
         headers = agent_weixin._headers("secret", "{}")
 

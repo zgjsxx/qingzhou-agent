@@ -15,6 +15,7 @@ ssh_keys
 .env.example
 .langgraph_api/
 .mcp.example.json
-.weixin
+config/weixin/
+.weixin/
 botpy.log*
 .runtime/

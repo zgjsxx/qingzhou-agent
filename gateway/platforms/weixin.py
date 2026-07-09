@@ -42,7 +42,8 @@ DEFAULT_REPLY_MAX_CHARS = 2000
 SESSION_EXPIRED_ERRCODE = -14
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-WEIXIN_DATA_DIR = ROOT_DIR / ".weixin"
+WEIXIN_DATA_DIR = ROOT_DIR / "config" / "weixin"
+LEGACY_WEIXIN_DATA_DIR = ROOT_DIR / ".weixin"
 ACCOUNT_FILE = WEIXIN_DATA_DIR / "account.json"
 SYNC_FILE = WEIXIN_DATA_DIR / "sync.json"
 CONTEXT_TOKENS_FILE = WEIXIN_DATA_DIR / "context-tokens.json"
@@ -91,8 +92,27 @@ def _json_read(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def migrate_legacy_data() -> None:
+    """Move existing .weixin runtime files into config/weixin."""
+    for filename in ("account.json", "sync.json", "context-tokens.json"):
+        source = LEGACY_WEIXIN_DATA_DIR / filename
+        destination = WEIXIN_DATA_DIR / filename
+        if not source.is_file() or destination.exists():
+            continue
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source.replace(destination)
+        except OSError:
+            continue
+    try:
+        LEGACY_WEIXIN_DATA_DIR.rmdir()
+    except OSError:
+        pass
+
+
 def save_account(credentials: dict[str, str]) -> None:
     """Persist QR-login credentials outside source control."""
+    migrate_legacy_data()
     _json_write(
         ACCOUNT_FILE,
         {
@@ -106,6 +126,7 @@ def save_account(credentials: dict[str, str]) -> None:
 
 
 def load_account() -> dict[str, str]:
+    migrate_legacy_data()
     saved = _json_read(ACCOUNT_FILE)
     config = config_section("weixin")
     return {
@@ -343,6 +364,7 @@ def _collect_ai_texts(
 
 class WeixinBridge:
     def __init__(self, graph: Any, credentials: dict[str, str]):
+        migrate_legacy_data()
         self.graph = graph
         self.account_id = credentials["account_id"]
         self.token = credentials["token"]

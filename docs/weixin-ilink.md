@@ -24,7 +24,7 @@ python scripts/weixin_login.py
 Token 会保存到：
 
 ```text
-backend/.weixin/account.json
+config/weixin/account.json
 ```
 
 该目录已加入 `.gitignore`，不能提交或分享其中的 Token。
@@ -43,7 +43,7 @@ WEIXIN_ENABLED=true
 
 ## 运行数据
 
-以下文件均保存在 `backend/.weixin/`：
+以下文件均保存在 `config/weixin/`：
 
 - `account.json`：机器人账号和 Token。
 - `sync.json`：`getupdates` 长轮询游标。
@@ -51,3 +51,5 @@ WEIXIN_ENABLED=true
 
 同一 Token 同一时间只应由一个后端实例轮询。登录失效后，需要重新运行扫码
 登录脚本。
+
+旧版本的 `.weixin/` 数据会在首次启动或登录时自动迁移到新目录。
