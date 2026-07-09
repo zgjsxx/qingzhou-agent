@@ -101,6 +101,7 @@ prune_old_tool_results(
 
 ### 默认参数
 
+代码默认常量
 ```text
 DEFAULT_PRUNE_PROTECT_LAST_MESSAGES = 20
 DEFAULT_PRUNE_PROTECT_TAIL_TOKENS = 20_000
