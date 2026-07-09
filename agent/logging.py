@@ -44,7 +44,7 @@ def _log_dir() -> Path:
     configured = Path(os.getenv("AGENT_LOG_DIR", "logs"))
     if configured.is_absolute():
         return configured
-    return ROOT_DIR / ".runtime" / configured
+    return ROOT_DIR / configured
 
 
 LOG_DIR = _log_dir()

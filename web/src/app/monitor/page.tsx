@@ -340,7 +340,7 @@ export default function MonitorPage() {
             <Activity className="text-muted-foreground mx-auto mb-3 size-8" />
             <p className="font-medium">暂时没有日志</p>
             <p className="text-muted-foreground mt-1 text-sm">
-              Agent 事件日志需要在 backend/.env 中设置 AGENT_LOG_ENABLED=true，
+              Agent 事件日志需要在项目根目录 .env 中设置 AGENT_LOG_ENABLED=true，
               然后重启后端。
             </p>
           </div>

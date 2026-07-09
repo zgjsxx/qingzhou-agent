@@ -31,7 +31,7 @@ config/weixin/account.json
 
 ## 启用
 
-可以在配置页面的 `Weixin` 项中打开开关，也可以在 `backend/.env` 中设置：
+可以在配置页面的 `Weixin` 项中打开开关，也可以在项目根目录 `.env` 中设置：
 
 ```env
 WEIXIN_ENABLED=true

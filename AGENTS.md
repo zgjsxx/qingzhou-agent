@@ -7,7 +7,7 @@
 - 后端图入口：`agent/graph.py`
 - 工具定义：`tools/registry.py`
 - 智能体交互日志：`agent/logging.py`
-- LangGraph 开发配置：`backend/langgraph.json`
+- LangGraph 开发配置：`langgraph.json`
 - 前端聊天界面：`web/src`
 
 后端通过 LangGraph Server 暴露名为 `agent` 的图，地址为
@@ -153,7 +153,7 @@ AGENT_LOG_ENABLED=true
 开启后默认写入：
 
 ```text
-backend/logs/agent.jsonl
+logs/agent.jsonl
 ```
 
 记录的事件包括：
@@ -174,7 +174,7 @@ backend/logs/agent.jsonl
 - `AGENT_LOG_MAX_BYTES`
 - `AGENT_LOG_BACKUP_COUNT`
 
-`backend/logs/` 目录已被 git 忽略。
+`logs/` 目录已被 git 忽略。
 
 ## 技能加载
 
@@ -270,7 +270,7 @@ streamResumable: false
 LangGraph dev 会把本地状态存储在：
 
 ```text
-backend/.langgraph_api/
+.langgraph_api/
 ```
 
 重要文件包括：
@@ -285,14 +285,14 @@ backend/.langgraph_api/
 重置本地 LangGraph dev 状态：
 
 1. 停止后端进程。
-2. 将 `backend/.langgraph_api/` 移到备份位置，或删除它。
+2. 将 `.langgraph_api/` 移到备份位置，或删除它。
 3. 从浏览器 URL 中移除 `threadId=...`，或开启一个新聊天。
 4. 重启后端。
 
 更推荐先移动目录做备份，例如：
 
 ```powershell
-Move-Item backend\.langgraph_api backend\.langgraph_api.backup
+Move-Item .langgraph_api .langgraph_api.backup
 ```
 
 ## Git 提交规范
@@ -335,6 +335,6 @@ docs(agent): document git commit convention
   - `langgraph.exe`
   - `lcchat` 环境中的 `python.exe`
   - 高 CPU 占用的 `powershell.exe`、`cmd.exe` 或 `Robocopy.exe`
-- 调试时最有用的文件是 `backend/logs/agent.jsonl`。
+- 调试时最有用的文件是 `logs/agent.jsonl`。
 - 如果 `agent.jsonl` 中出现 `tool.start` 但没有对应的 `tool.end`，
   通常表示当前 run 正在等待该工具返回。

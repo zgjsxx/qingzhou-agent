@@ -7,11 +7,18 @@ export const dynamic = "force-dynamic";
 
 const repoRoot = path.resolve(process.cwd(), "..");
 const sources = {
-  agent: path.join(repoRoot, "backend", "logs", "agent.jsonl"),
-  backend: path.join(repoRoot, ".runtime", "logs", "backend.out.log"),
-  "backend-error": path.join(repoRoot, ".runtime", "logs", "backend.err.log"),
-  frontend: path.join(repoRoot, ".runtime", "logs", "frontend.out.log"),
-  "frontend-error": path.join(repoRoot, ".runtime", "logs", "frontend.err.log"),
+  agent: [
+    path.join(repoRoot, "logs", "agent.jsonl"),
+    path.join(repoRoot, ".runtime", "logs", "agent.jsonl"),
+  ],
+  backend: [path.join(repoRoot, ".runtime", "logs", "backend.out.log")],
+  "backend-error": [
+    path.join(repoRoot, ".runtime", "logs", "backend.err.log"),
+  ],
+  frontend: [path.join(repoRoot, ".runtime", "logs", "frontend.out.log")],
+  "frontend-error": [
+    path.join(repoRoot, ".runtime", "logs", "frontend.err.log"),
+  ],
 } as const;
 
 type LogSource = keyof typeof sources;
@@ -68,6 +75,23 @@ async function readTail(filePath: string, maxBytes: number) {
   }
 }
 
+async function readFirstAvailable(paths: readonly string[], maxBytes: number) {
+  let missingError: unknown;
+  for (const filePath of paths) {
+    try {
+      return await readTail(filePath, maxBytes);
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String(error.code)
+          : "";
+      if (code !== "ENOENT") throw error;
+      missingError = error;
+    }
+  }
+  throw missingError;
+}
+
 export async function GET(request: NextRequest) {
   const requestedSource = request.nextUrl.searchParams.get("source") ?? "agent";
   if (!(requestedSource in sources)) {
@@ -78,7 +102,7 @@ export async function GET(request: NextRequest) {
   const limit = clampLimit(request.nextUrl.searchParams.get("limit"));
 
   try {
-    const { text, fileStat } = await readTail(
+    const { text, fileStat } = await readFirstAvailable(
       sources[source],
       source === "agent" ? 5 * 1024 * 1024 : 1024 * 1024,
     );

@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -16,6 +16,36 @@ from agent.commands import CLEAR_RESPONSE, HELP_RESPONSE
 
 
 class AgentBotpyTest(unittest.TestCase):
+    def test_configure_logging_uses_botpy_api_when_available(self):
+        module = SimpleNamespace(configure_logging=Mock())
+
+        backend = agent_botpy._configure_botpy_logging(module)
+
+        self.assertEqual(backend, "botpy")
+        module.configure_logging.assert_called_once()
+
+    def test_configure_logging_falls_back_for_older_botpy(self):
+        logger = SimpleNamespace(
+            handlers=[],
+            addHandler=Mock(),
+            setLevel=Mock(),
+        )
+        handler = SimpleNamespace(setFormatter=Mock())
+        with (
+            patch("agent_botpy.BOTPY_LOG_DIR") as log_dir,
+            patch("agent_botpy.logging.getLogger", return_value=logger),
+            patch(
+                "agent_botpy.logging.handlers.TimedRotatingFileHandler",
+                return_value=handler,
+            ),
+        ):
+            backend = agent_botpy._configure_botpy_logging(SimpleNamespace())
+
+        self.assertEqual(backend, "stdlib")
+        log_dir.mkdir.assert_called_once_with(parents=True, exist_ok=True)
+        logger.addHandler.assert_called_once_with(handler)
+        logger.setLevel.assert_called_once_with(agent_botpy.logging.INFO)
+
     def test_parse_botpy_at_message_event_strips_mention(self):
         message = SimpleNamespace(
             id="msg-1",

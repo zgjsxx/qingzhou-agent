@@ -29,7 +29,7 @@
 
 ### 案例一：RTDB 进程数据来源问题
 
-在 `backend/logs/agent.jsonl` 中：
+在 `logs/agent.jsonl` 中：
 
 - `msg_ccfb8313-b389-427d-8e7a-b3a802c37333`
   - 已经给出了完整回答：
@@ -151,7 +151,7 @@
 
 如果后续再次遇到“飞书只回了半句”的问题，可按下面顺序快速检查：
 
-1. 看 `backend/logs/agent.jsonl` 中是否先有一条长正文的 `model.end`
+1. 看 `logs/agent.jsonl` 中是否先有一条长正文的 `model.end`
 2. 看这条长正文是否同时带了 `todo_write` 或其他工具调用
 3. 看工具返回后是否又出现一条很短的 `end_turn`
 4. 看桥接层是否仍然使用“倒序取最后一条 AIMessage”的逻辑

@@ -8,6 +8,8 @@ context window.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -44,9 +46,11 @@ DEFAULT_COMPACT_MARGIN_TOKENS = 13_000
 DEFAULT_COMPACT_KEEP_MESSAGES = 20
 DEFAULT_MANUAL_COMPACT_KEEP_MESSAGES = 0
 DEFAULT_COMPACT_MAX_FAILURES = 3
-DEFAULT_SNIP_TRIGGER_MESSAGES = 50
-DEFAULT_SNIP_KEEP_HEAD_MESSAGES = 3
-DEFAULT_SNIP_KEEP_TAIL_MESSAGES = 47
+DEFAULT_PRUNE_PROTECT_LAST_MESSAGES = 20
+DEFAULT_PRUNE_PROTECT_TAIL_TOKENS = 20_000
+DEFAULT_PRUNE_MIN_RESULT_CHARS = 200
+DEFAULT_PRUNE_ARGUMENT_CHARS = 500
+DEFAULT_PRUNE_ARGUMENT_HEAD_CHARS = 200
 
 
 class ContextUsage(TypedDict):
@@ -69,15 +73,12 @@ class CompactMetadata(TypedDict):
     focus: NotRequired[str]
 
 
-class SnipCompactMetadata(TypedDict):
-    last_snipped_at: str
-    before_message_count: int
-    after_message_count: int
-    removed_message_count: int
-    keep_head_messages: int
-    keep_tail_messages: int
-    actual_tail_messages: int
-    tail_expanded_for_tool_pair: bool
+class ToolPruneMetadata(TypedDict):
+    last_pruned_at: str
+    pruned_tool_results: int
+    deduplicated_tool_results: int
+    truncated_tool_calls: int
+    protected_messages: int
 
 
 class XuAgentState(AgentState):
@@ -85,7 +86,7 @@ class XuAgentState(AgentState):
     # 前端从 graph state 读取该字段，用于在对话框中显示当前上下文占用量。
     context_usage: NotRequired[ContextUsage]
     compact_metadata: NotRequired[CompactMetadata]
-    snip_compact_metadata: NotRequired[SnipCompactMetadata]
+    tool_prune_metadata: NotRequired[ToolPruneMetadata]
     compact_failure_count: NotRequired[int]
 
 
@@ -111,11 +112,11 @@ def is_context_compaction_enabled() -> bool:
     return _bool_env("AGENT_AUTO_COMPACT_ENABLED", True)
 
 
-def is_snip_compaction_enabled() -> bool:
-    """Return whether lightweight message-count based compaction is enabled."""
-    if _bool_env("DISABLE_COMPACT", False) or _bool_env("DISABLE_AUTO_COMPACT", False):
+def is_tool_result_pruning_enabled() -> bool:
+    """Return whether old tool payload pruning is enabled."""
+    if _bool_env("DISABLE_COMPACT", False):
         return False
-    return _bool_env("AGENT_SNIP_COMPACT_ENABLED", True)
+    return _bool_env("AGENT_TOOL_RESULT_PRUNE_ENABLED", True)
 
 
 def _request_messages(request: ModelRequest) -> list[BaseMessage]:
@@ -239,119 +240,235 @@ def _message_has_tool_calls(message: BaseMessage) -> bool:
     return isinstance(message, AIMessage) and bool(getattr(message, "tool_calls", None))
 
 
-def _message_tool_result_ids(message: BaseMessage) -> set[str]:
-    ids: set[str] = set()
-    if isinstance(message, ToolMessage):
-        tool_call_id = getattr(message, "tool_call_id", None)
-        if tool_call_id:
-            ids.add(str(tool_call_id))
-
-    content = getattr(message, "content", None)
-    if isinstance(content, list):
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            if str(block.get("type", "")).lower() != "tool_result":
-                continue
-            for key in ("tool_call_id", "tool_use_id", "id"):
-                value = block.get(key)
-                if value:
-                    ids.add(str(value))
-                    break
-    return ids
+def _message_budget_tokens(message: BaseMessage) -> int:
+    """Return a conservative token estimate for pruning's protected tail."""
+    content = _safe_content_for_summary(getattr(message, "content", ""))
+    chars = len(content) if isinstance(content, str) else len(json.dumps(content, ensure_ascii=False, default=str))
+    tool_calls = getattr(message, "tool_calls", None) or []
+    chars += len(json.dumps(tool_calls, ensure_ascii=False, default=str))
+    return chars // 4 + 10
 
 
-def _message_tool_call_ids(message: BaseMessage) -> set[str]:
-    ids: set[str] = set()
-    if isinstance(message, AIMessage):
+def _tool_call_index(messages: list[BaseMessage]) -> dict[str, tuple[str, dict[str, Any]]]:
+    calls: dict[str, tuple[str, dict[str, Any]]] = {}
+    for message in messages:
+        if not isinstance(message, AIMessage):
+            continue
         for tool_call in getattr(message, "tool_calls", None) or []:
-            if isinstance(tool_call, dict) and tool_call.get("id"):
-                ids.add(str(tool_call["id"]))
-
-    content = getattr(message, "content", None)
-    if isinstance(content, list):
-        for block in content:
-            if not isinstance(block, dict):
+            if not isinstance(tool_call, dict):
                 continue
-            if str(block.get("type", "")).lower() != "tool_use":
+            call_id = str(tool_call.get("id") or "")
+            if not call_id:
                 continue
-            value = block.get("id")
-            if value:
-                ids.add(str(value))
-    return ids
+            args = tool_call.get("args")
+            calls[call_id] = (
+                str(tool_call.get("name") or "unknown"),
+                args if isinstance(args, dict) else {},
+            )
+    return calls
 
 
-def _find_previous_tool_call_message(
-    messages: list[BaseMessage],
-    before_index: int,
-    tool_result_ids: set[str],
-) -> int | None:
-    for index in range(before_index - 1, -1, -1):
-        if _message_tool_call_ids(messages[index]) & tool_result_ids:
-            return index
-    return None
+def _tool_result_summary(tool_name: str, args: dict[str, Any], content: str) -> str:
+    content_len = len(content)
+    line_count = content.count("\n") + 1 if content.strip() else 0
 
+    if tool_name in {"run_shell_command", "run_ssh_command"}:
+        command = str(args.get("command") or "")
+        command = command if len(command) <= 80 else f"{command[:77]}..."
+        exit_match = re.search(r"(?:exit_code|returncode)\s*[:=]\s*(-?\d+)", content)
+        exit_code = exit_match.group(1) if exit_match else "?"
+        return f"[{tool_name}] ran `{command}` -> exit {exit_code}, {line_count} lines output"
+    if tool_name == "read_file":
+        return f"[read_file] read {args.get('path', '?')} ({content_len:,} chars)"
+    if tool_name == "write_file":
+        written = str(args.get("content") or "")
+        written_lines = written.count("\n") + 1 if written else "?"
+        return f"[write_file] wrote {args.get('path', '?')} ({written_lines} lines)"
+    if tool_name == "edit_file":
+        return f"[edit_file] edited {args.get('path', '?')} ({content_len:,} chars result)"
+    if tool_name == "glob":
+        return f"[glob] matched `{args.get('pattern', '?')}` ({line_count} lines output)"
+    if tool_name in {"rag_search", "web_search"}:
+        query = args.get("query", "?")
+        return f"[{tool_name}] query={query!r} ({content_len:,} chars result)"
+    if tool_name.startswith("playwright_"):
+        detail = args.get("url") or args.get("selector") or args.get("path") or ""
+        suffix = f" {detail}" if detail else ""
+        return f"[{tool_name}]{suffix} ({content_len:,} chars result)"
 
-def _snip_tail_start(messages: list[BaseMessage], tail_start: int, min_start: int) -> tuple[int, bool]:
-    expanded = False
-    while tail_start > min_start:
-        tool_result_ids = _message_tool_result_ids(messages[tail_start])
-        if not tool_result_ids:
-            break
-
-        tool_call_index = _find_previous_tool_call_message(messages, tail_start, tool_result_ids)
-        if tool_call_index is None or tool_call_index < min_start or tool_call_index >= tail_start:
-            break
-
-        tail_start = tool_call_index
-        expanded = True
-    return tail_start, expanded
-
-
-def _snip_compact_state(state: Any) -> dict[str, Any]:
-    if not is_snip_compaction_enabled():
-        return {}
-
-    messages = list(_state_value(state, "messages", []) or [])
-    trigger_count = _int_env("AGENT_SNIP_TRIGGER_MESSAGES", DEFAULT_SNIP_TRIGGER_MESSAGES)
-    if len(messages) <= trigger_count:
-        return {}
-
-    keep_head = _int_env("AGENT_SNIP_KEEP_HEAD_MESSAGES", DEFAULT_SNIP_KEEP_HEAD_MESSAGES, minimum=0)
-    keep_tail = _int_env("AGENT_SNIP_KEEP_TAIL_MESSAGES", DEFAULT_SNIP_KEEP_TAIL_MESSAGES, minimum=0)
-    if keep_head + keep_tail >= len(messages):
-        return {}
-
-    tail_start = max(len(messages) - keep_tail, keep_head)
-    tail_start, tail_expanded = _snip_tail_start(messages, tail_start, keep_head)
-    removed_count = max(tail_start - keep_head, 0)
-    if removed_count <= 0:
-        return {}
-
-    snipped_messages = [*messages[:keep_head], *messages[tail_start:]]
-    metadata: SnipCompactMetadata = {
-        "last_snipped_at": datetime.now(timezone.utc).isoformat(),
-        "before_message_count": len(messages),
-        "after_message_count": len(snipped_messages),
-        "removed_message_count": removed_count,
-        "keep_head_messages": keep_head,
-        "keep_tail_messages": keep_tail,
-        "actual_tail_messages": len(messages) - tail_start,
-        "tail_expanded_for_tool_pair": tail_expanded,
-    }
-    log_event(
-        "context.snip_compact",
-        before_message_count=len(messages),
-        after_message_count=len(snipped_messages),
-        removed_message_count=removed_count,
-        keep_head_messages=keep_head,
-        keep_tail_messages=keep_tail,
-        actual_tail_messages=len(messages) - tail_start,
-        tail_expanded_for_tool_pair=tail_expanded,
+    arg_preview = " ".join(
+        f"{key}={str(value)[:40]}"
+        for key, value in list(args.items())[:2]
+        if key not in {"content", "password", "private_key", "token", "api_key"}
     )
+    return f"[{tool_name}]{(' ' + arg_preview) if arg_preview else ''} ({content_len:,} chars result)"
+
+
+def _truncate_tool_argument(value: Any, head_chars: int) -> Any:
+    if isinstance(value, str):
+        return value if len(value) <= head_chars else f"{value[:head_chars]}...[truncated]"
+    if isinstance(value, dict):
+        return {key: _truncate_tool_argument(item, head_chars) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_truncate_tool_argument(item, head_chars) for item in value]
+    return value
+
+
+def _strip_tool_images(content: Any) -> tuple[Any, bool]:
+    if not isinstance(content, list):
+        return content, False
+    changed = False
+    stripped: list[Any] = []
+    for block in content:
+        if isinstance(block, dict) and str(block.get("type", "")).lower() in {
+            "image",
+            "image_url",
+            "input_image",
+        }:
+            stripped.append({"type": "text", "text": "[screenshot removed to save context]"})
+            changed = True
+        else:
+            stripped.append(block)
+    return stripped, changed
+
+
+def _prune_boundary(messages: list[BaseMessage]) -> int:
+    protect_count = _int_env(
+        "AGENT_TOOL_RESULT_PROTECT_LAST_MESSAGES",
+        DEFAULT_PRUNE_PROTECT_LAST_MESSAGES,
+        minimum=0,
+    )
+    token_budget = _int_env(
+        "AGENT_TOOL_RESULT_PROTECT_TAIL_TOKENS",
+        DEFAULT_PRUNE_PROTECT_TAIL_TOKENS,
+    )
+    minimum = min(protect_count, len(messages))
+    accumulated = 0
+    tail_start = len(messages)
+    for index in range(len(messages) - 1, -1, -1):
+        tokens = _message_budget_tokens(messages[index])
+        protected_count = len(messages) - 1 - index
+        if accumulated + tokens > token_budget and protected_count >= minimum:
+            break
+        accumulated += tokens
+        tail_start = index
+    return tail_start
+
+
+def prune_old_tool_results(
+    messages: list[BaseMessage],
+) -> tuple[list[BaseMessage], ToolPruneMetadata | None]:
+    """Shrink old tool payloads while preserving every conversation message."""
+    if not messages or not is_tool_result_pruning_enabled():
+        return messages, None
+
+    result = list(messages)
+    calls = _tool_call_index(result)
+    boundary = _prune_boundary(result)
+    min_chars = _int_env(
+        "AGENT_TOOL_RESULT_PRUNE_MIN_CHARS",
+        DEFAULT_PRUNE_MIN_RESULT_CHARS,
+    )
+    argument_chars = _int_env(
+        "AGENT_TOOL_CALL_PRUNE_ARGUMENT_CHARS",
+        DEFAULT_PRUNE_ARGUMENT_CHARS,
+    )
+    argument_head = _int_env(
+        "AGENT_TOOL_CALL_ARGUMENT_HEAD_CHARS",
+        DEFAULT_PRUNE_ARGUMENT_HEAD_CHARS,
+    )
+    pruned = 0
+    deduplicated = 0
+    truncated_calls = 0
+
+    hashes: dict[str, int] = {}
+    for index in range(len(result) - 1, -1, -1):
+        message = result[index]
+        if not isinstance(message, ToolMessage) or not isinstance(message.content, str):
+            continue
+        if len(message.content) <= min_chars:
+            continue
+        digest = hashlib.md5(message.content.encode("utf-8", errors="replace")).hexdigest()
+        if digest in hashes:
+            result[index] = message.model_copy(
+                update={"content": "[Duplicate tool output - same content as a more recent call]"}
+            )
+            deduplicated += 1
+        else:
+            hashes[digest] = index
+
+    for index in range(boundary):
+        message = result[index]
+        if isinstance(message, ToolMessage):
+            stripped, image_changed = _strip_tool_images(message.content)
+            if image_changed:
+                result[index] = message.model_copy(update={"content": stripped})
+                pruned += 1
+                continue
+            if not isinstance(message.content, str):
+                continue
+            if (
+                len(message.content) <= min_chars
+                or message.content.startswith("[Duplicate tool output")
+            ):
+                continue
+            tool_name, args = calls.get(
+                str(getattr(message, "tool_call_id", "") or ""),
+                (str(getattr(message, "name", "") or "unknown"), {}),
+            )
+            result[index] = message.model_copy(
+                update={"content": _tool_result_summary(tool_name, args, message.content)}
+            )
+            pruned += 1
+            continue
+
+        if not isinstance(message, AIMessage):
+            continue
+        tool_calls = list(getattr(message, "tool_calls", None) or [])
+        changed = False
+        for call_index, tool_call in enumerate(tool_calls):
+            if not isinstance(tool_call, dict):
+                continue
+            args = tool_call.get("args")
+            if not isinstance(args, dict):
+                continue
+            serialized = json.dumps(args, ensure_ascii=False, default=str)
+            if len(serialized) <= argument_chars:
+                continue
+            truncated_args = _truncate_tool_argument(args, argument_head)
+            if truncated_args == args:
+                continue
+            tool_calls[call_index] = {
+                **tool_call,
+                "args": truncated_args,
+            }
+            changed = True
+            truncated_calls += 1
+        if changed:
+            result[index] = message.model_copy(update={"tool_calls": tool_calls})
+
+    changed_count = pruned + deduplicated + truncated_calls
+    if not changed_count:
+        return messages, None
+
+    metadata: ToolPruneMetadata = {
+        "last_pruned_at": datetime.now(timezone.utc).isoformat(),
+        "pruned_tool_results": pruned,
+        "deduplicated_tool_results": deduplicated,
+        "truncated_tool_calls": truncated_calls,
+        "protected_messages": len(messages) - boundary,
+    }
+    log_event("context.tool_prune", **metadata)
+    return result, metadata
+
+
+def _tool_prune_state_update(
+    messages: list[BaseMessage],
+    metadata: ToolPruneMetadata,
+) -> dict[str, Any]:
     return {
-        "messages": _replace_messages_update(snipped_messages),
-        "snip_compact_metadata": metadata,
+        "messages": _replace_messages_update(messages),
+        "tool_prune_metadata": metadata,
     }
 
 
@@ -729,16 +846,26 @@ class AgentContextCompactMiddleware(AgentMiddleware):
 
     def before_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
         try:
-            update = _snip_compact_state(state) or _compact_state(state)
+            messages, prune_metadata = prune_old_tool_results(
+                list(_state_value(state, "messages", []) or [])
+            )
+            working_state = {**state, "messages": messages}
+            update = _compact_state(working_state)
+            if not update and prune_metadata:
+                update = _tool_prune_state_update(messages, prune_metadata)
         except Exception as exc:
             update = _compact_failure_update(state, exc)
         return update or None
 
     async def abefore_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
         try:
-            update = _snip_compact_state(state)
-            if not update:
-                update = await _acompact_state(state)
+            messages, prune_metadata = prune_old_tool_results(
+                list(_state_value(state, "messages", []) or [])
+            )
+            working_state = {**state, "messages": messages}
+            update = await _acompact_state(working_state)
+            if not update and prune_metadata:
+                update = _tool_prune_state_update(messages, prune_metadata)
         except Exception as exc:
             update = _compact_failure_update(state, exc)
         return update or None

@@ -156,7 +156,7 @@ def clear_context_update() -> dict[str, Any]:
         "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES, content="")],
         "context_usage": {},
         "compact_metadata": {},
-        "snip_compact_metadata": {},
+        "tool_prune_metadata": {},
         "compact_failure_count": 0,
     }
 

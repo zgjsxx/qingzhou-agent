@@ -25,7 +25,7 @@
 - `Require server mention`：服务器频道里是否必须 `@机器人` 或回复机器人。
 - `Merge Wait`：合并同一频道连续消息的静默等待时间。
 
-也可以使用 `backend/.env`：
+也可以使用项目根目录 `.env`：
 
 ```env
 DISCORD_ENABLED=true
@@ -43,7 +43,7 @@ DISCORD_PROXY=http://127.0.0.1:7890
 - 私信和服务器频道文本消息。
 - `/help`、`/clear`、`/compact`。
 - 连续消息合并。
-- 附件下载到 `backend/.agent_uploads/discord/`。
+- 附件下载到 `.agent_uploads/discord/`。
 - 将 Agent 各轮可见 AI 文本按顺序发送，不发送工具调用和工具结果。
 - 按 Discord channel ID 隔离 LangGraph thread 和历史消息。
 

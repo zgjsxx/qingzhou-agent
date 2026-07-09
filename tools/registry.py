@@ -877,7 +877,7 @@ def rag_rebuild_index(data_dir: str = "") -> str:
     """Rebuild the local llama-index RAG index from documents.
 
     Args:
-        data_dir: Optional document directory. Defaults to RAG_DOCS_DIR or backend/data/rag_docs.
+        data_dir: Optional document directory. Defaults to RAG_DOCS_DIR or data/rag_docs.
     """
     from agent.rag import rag_rebuild_index as rebuild_index
 
@@ -997,7 +997,7 @@ def schedule_cron(cron: str, prompt: str, recurring: bool = True, durable: bool 
         durable: True to persist the job across backend restarts.
     """
     if not is_cron_enabled():
-        return "Error: cron scheduler is disabled. Set AGENT_CRON_ENABLED=true in backend/.env and restart the backend."
+        return "Error: cron scheduler is disabled. Set AGENT_CRON_ENABLED=true in .env and restart the agent."
 
     thread_id = CURRENT_TOOL_THREAD_ID.get()
     result = schedule_cron_job(
@@ -1031,7 +1031,7 @@ def list_crons(current_thread_only: bool = True) -> str:
     if not is_cron_enabled():
         scheduler_note = (
             "Warning: cron scheduler is disabled. Set AGENT_CRON_ENABLED=true "
-            "in backend/.env and restart the backend.\n\n"
+            "in .env and restart the agent.\n\n"
         )
 
     thread_id = CURRENT_TOOL_THREAD_ID.get() if current_thread_only else None

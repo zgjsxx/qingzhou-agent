@@ -42,7 +42,7 @@ export type StateType = {
   ui?: UIMessage[];
   context_usage?: ContextUsage;
   compact_metadata?: Record<string, unknown>;
-  snip_compact_metadata?: Record<string, unknown>;
+  tool_prune_metadata?: Record<string, unknown>;
   compact_failure_count?: number;
 };
 
@@ -161,7 +161,7 @@ const StreamSession = ({
             messages: [{ type: "remove", id: "__remove_all__", content: "" }],
             context_usage: {},
             compact_metadata: {},
-            snip_compact_metadata: {},
+            tool_prune_metadata: {},
             compact_failure_count: 0,
           },
         },

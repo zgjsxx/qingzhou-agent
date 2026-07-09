@@ -3,8 +3,8 @@ r"""Manually rebuild the local RAG index.
 
 Examples:
     python scripts/build_rag_index.py
-    python scripts/build_rag_index.py --data-dir backend/data/rag_docs
-    python scripts/build_rag_index.py --env-file backend/.env --data-dir D:\docs\rag
+    python scripts/build_rag_index.py --data-dir data/rag_docs
+    python scripts/build_rag_index.py --env-file .env --data-dir D:\docs\rag
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-dir",
         default="",
-        help="Document directory. Defaults to RAG_DOCS_DIR or backend/data/rag_docs.",
+        help="Document directory. Defaults to RAG_DOCS_DIR or data/rag_docs.",
     )
     parser.add_argument(
         "--env-file",

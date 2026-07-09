@@ -232,6 +232,37 @@ async def reply_botpy_text(message: Any, text: str) -> None:
         await message.reply(content=chunk)
 
 
+def _configure_botpy_logging(botpy_module: Any) -> str:
+    """Configure botpy logs across qq-botpy versions."""
+    BOTPY_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    configure_logging = getattr(botpy_module, "configure_logging", None)
+    if callable(configure_logging):
+        configure_logging(ext_handlers=[{
+            "handler": logging.handlers.TimedRotatingFileHandler,
+            "filename": str(BOTPY_LOG_DIR / "%(name)s.log"),
+            "when": "D",
+            "backupCount": 7,
+            "encoding": "utf-8",
+        }])
+        return "botpy"
+
+    logger = logging.getLogger("botpy")
+    if not any(getattr(handler, "_qingzhou_botpy_handler", False) for handler in logger.handlers):
+        handler = logging.handlers.TimedRotatingFileHandler(
+            BOTPY_LOG_DIR / "botpy.log",
+            when="D",
+            backupCount=7,
+            encoding="utf-8",
+        )
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        handler._qingzhou_botpy_handler = True
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    return "stdlib"
+
+
 class BotpyBridgeClient:
     """Wrapper that provides botpy event handlers while reusing the local graph."""
 
@@ -338,14 +369,9 @@ class BotpyBridgeClient:
         except ImportError as exc:
             raise RuntimeError("QQ bot mode requires: pip install qq-botpy") from exc
 
-        BOTPY_LOG_DIR.mkdir(parents=True, exist_ok=True)
-        botpy.configure_logging(ext_handlers=[{
-            "handler": logging.handlers.TimedRotatingFileHandler,
-            "filename": str(BOTPY_LOG_DIR / "%(name)s.log"),
-            "when": "D",
-            "backupCount": 7,
-            "encoding": "utf-8",
-        }])
+        logging_backend = _configure_botpy_logging(botpy)
+        if logging_backend == "stdlib":
+            log_event("botpy.logging_compat", reason="configure_logging_unavailable")
 
         intents = botpy.Intents(
             public_guild_messages=_bool_env("BOTPY_PUBLIC_GUILD_MESSAGES", True),

@@ -21,7 +21,7 @@
 - `Require group mention`：群聊中是否必须回复机器人或 `@机器人`。
 - `Merge Wait`：合并同一聊天连续消息的静默等待时间。
 
-也可以使用 `backend/.env`：
+也可以使用项目根目录 `.env`：
 
 ```env
 TELEGRAM_ENABLED=true
@@ -38,7 +38,7 @@ TELEGRAM_MERGE_WAIT_SECONDS=3
 - 私聊和群聊文本。
 - `/help`、`/clear`、`/compact`。
 - 连续消息合并。
-- 图片与文档下载到 `backend/.agent_uploads/telegram/`。
+- 图片与文档下载到 `.agent_uploads/telegram/`。
 - 将 Agent 各轮可见 AI 文本按顺序发送，不发送工具调用和工具结果。
 - 按 Telegram chat ID 隔离 LangGraph thread 和历史消息。
 

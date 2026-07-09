@@ -25,7 +25,7 @@ DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 12000
 DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 400
 LARK_ACK_EMOJI = os.getenv("LARK_ACK_EMOJI_TYPE", "OK")
-LARK_UPLOAD_DIR = Path(__file__).resolve().parents[2] / "backend" / ".agent_uploads" / "lark"
+LARK_UPLOAD_DIR = Path(__file__).resolve().parents[2] / ".agent_uploads" / "lark"
 MERGE_WAIT_SECONDS = max(0.0, min(float(os.getenv("LARK_MERGE_WAIT_SECONDS", "10.0")), 10.0))
 
 _start_lock = threading.Lock()
