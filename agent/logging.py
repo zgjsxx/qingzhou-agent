@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import queue
+import re
 import time
 import traceback
 from datetime import datetime, timezone
@@ -51,6 +52,14 @@ LOG_DIR = _log_dir()
 LOG_FILE = LOG_DIR / "agent.jsonl"
 MAX_BYTES = _int_env("AGENT_LOG_MAX_BYTES", 10 * 1024 * 1024)
 BACKUP_COUNT = _int_env("AGENT_LOG_BACKUP_COUNT", 5)
+SENSITIVE_TEXT_PATTERNS = (
+    re.compile(r"((?:Authorization|authorization)['\"]?\s*[:=]\s*['\"]?Bearer\s+)[^'\"},\s]+"),
+    re.compile(
+        r"((?:api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|password|secret)"
+        r"['\"]?\s*[:=]\s*['\"]?)[^'\"},\s]+",
+        re.IGNORECASE,
+    ),
+)
 
 
 def _build_logger() -> logging.Logger:
@@ -89,8 +98,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _redact_text(value: str) -> str:
+    redacted = value
+    for pattern in SENSITIVE_TEXT_PATTERNS:
+        redacted = pattern.sub(r"\1[REDACTED]", redacted)
+    return redacted
+
+
 def _safe_json(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, str):
+        return _redact_text(value)
+    if value is None or isinstance(value, (int, float, bool)):
         return value
     if isinstance(value, dict):
         return {str(k): _safe_json(v) for k, v in value.items()}

@@ -60,7 +60,11 @@ MODEL_SPEC = f"{LLM_ADAPTER_TYPE}:{LLM_MODEL}"
 MODEL = (
     init_chat_model(
         MODEL_SPEC,
-        **provider_model_kwargs(adapter=LLM_ADAPTER_TYPE, auth_token=LLM_AUTH_TOKEN),
+        **provider_model_kwargs(
+            adapter=LLM_ADAPTER_TYPE,
+            auth_token=LLM_AUTH_TOKEN,
+            base_url=LLM_BASE_URL,
+        ),
     )
     if LLM_AUTH_TOKEN and LLM_ADAPTER_TYPE.lower() == "anthropic"
     else MODEL_SPEC

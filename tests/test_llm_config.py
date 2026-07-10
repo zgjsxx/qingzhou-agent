@@ -19,6 +19,7 @@ def test_anthropic_auth_token_is_mapped_as_token(monkeypatch) -> None:
     assert os.environ["ANTHROPIC_AUTH_TOKEN"] == "auth-token"
     assert "ANTHROPIC_API_KEY" not in os.environ
     assert os.environ["ANTHROPIC_API_URL"] == "https://example.test"
+    assert os.environ["ANTHROPIC_BASE_URL"] == "https://example.test"
 
 
 def test_anthropic_api_key_remains_supported(monkeypatch) -> None:
@@ -34,4 +35,10 @@ def test_anthropic_api_key_remains_supported(monkeypatch) -> None:
 def test_anthropic_auth_token_adds_bearer_header() -> None:
     assert provider_model_kwargs(adapter="anthropic", auth_token="auth-token") == {
         "default_headers": {"Authorization": "Bearer auth-token"}
+    }
+
+
+def test_anthropic_base_url_is_passed_to_model_kwargs() -> None:
+    assert provider_model_kwargs(adapter="anthropic", base_url="https://example.test") == {
+        "base_url": "https://example.test"
     }

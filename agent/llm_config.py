@@ -5,11 +5,20 @@ from __future__ import annotations
 import os
 
 
-def provider_model_kwargs(*, adapter: str, auth_token: str = "") -> dict[str, object]:
+def provider_model_kwargs(
+    *,
+    adapter: str,
+    auth_token: str = "",
+    base_url: str = "",
+) -> dict[str, object]:
     """Return model options needed for provider-specific authentication."""
-    if adapter.strip().lower() == "anthropic" and auth_token:
-        return {"default_headers": {"Authorization": f"Bearer {auth_token}"}}
-    return {}
+    kwargs: dict[str, object] = {}
+    if adapter.strip().lower() == "anthropic":
+        if auth_token:
+            kwargs["default_headers"] = {"Authorization": f"Bearer {auth_token}"}
+        if base_url:
+            kwargs["base_url"] = base_url
+    return kwargs
 
 
 def configure_provider_env(
@@ -29,6 +38,7 @@ def configure_provider_env(
             os.environ["ANTHROPIC_API_KEY"] = api_key
         if base_url:
             os.environ["ANTHROPIC_API_URL"] = base_url
+            os.environ["ANTHROPIC_BASE_URL"] = base_url
     elif provider == "openai":
         if api_key:
             os.environ["OPENAI_API_KEY"] = api_key

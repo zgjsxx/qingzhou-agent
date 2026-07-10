@@ -6,7 +6,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agent.logging import AgentLoggingMiddleware, ROOT_DIR, _log_dir
+from agent.logging import AgentLoggingMiddleware, ROOT_DIR, _log_dir, _safe_json
 
 
 class AgentLoggingMiddlewareTest(unittest.TestCase):
@@ -23,6 +23,14 @@ class AgentLoggingMiddlewareTest(unittest.TestCase):
         _, kwargs = log_event.call_args
         self.assertEqual(kwargs["agent_name"], "subagent")
         self.assertEqual(kwargs["tool"], "read_file")
+
+    def test_safe_json_redacts_bearer_tokens(self):
+        value = "default_headers={'Authorization': 'Bearer token-123'}"
+
+        self.assertEqual(
+            _safe_json(value),
+            "default_headers={'Authorization': 'Bearer [REDACTED]'}",
+        )
 
 
 if __name__ == "__main__":

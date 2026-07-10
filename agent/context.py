@@ -562,15 +562,68 @@ def _format_compact_summary(text: str) -> str:
     return without_analysis
 
 
-def _summary_request_messages(messages_to_summarize: list[BaseMessage], focus: str = "") -> list[BaseMessage]:
+SUMMARY_MESSAGE_PREFIX = (
+    "This session is being continued from an earlier conversation that was compacted.\n"
+    "The summary below covers the earlier portion of the conversation.\n\n"
+)
+SUMMARY_MESSAGE_SUFFIX = (
+    "\n\nContinue the conversation from where it left off without asking the user to repeat context."
+)
+
+
+def _extract_compact_summary_body(message: BaseMessage) -> str:
+    if not isinstance(message, SystemMessage):
+        return ""
+    content = getattr(message, "content", "")
+    if not isinstance(content, str) or not content.startswith(SUMMARY_MESSAGE_PREFIX):
+        return ""
+    body = content[len(SUMMARY_MESSAGE_PREFIX) :]
+    if body.endswith(SUMMARY_MESSAGE_SUFFIX):
+        body = body[: -len(SUMMARY_MESSAGE_SUFFIX)]
+    return body.strip()
+
+
+def _find_latest_compact_summary(messages: list[BaseMessage]) -> tuple[int | None, str]:
+    for index in range(len(messages) - 1, -1, -1):
+        summary = _extract_compact_summary_body(messages[index])
+        if summary:
+            return index, summary
+    return None, ""
+
+
+def _summary_request_messages(
+    messages_to_summarize: list[BaseMessage],
+    focus: str = "",
+    previous_summary: str = "",
+) -> list[BaseMessage]:
     transcript = _serialize_messages_for_summary(messages_to_summarize)
     focus_block = f"\n\n<focus>\n{focus}\n</focus>" if focus else ""
+    previous_summary_block = (
+        f"<previous_summary>\n{previous_summary}\n</previous_summary>\n\n"
+        if previous_summary
+        else ""
+    )
+    update_instruction = (
+        "Update the previous summary with the new messages below. Preserve still-relevant facts, "
+        "merge new completed work and decisions, remove clearly obsolete details, and ensure the "
+        "latest unresolved user request from the new messages is reflected as current work. "
+        "Do not treat pending tasks inside the previous summary as active unless the new messages "
+        "explicitly continue them.\n\n"
+        if previous_summary
+        else ""
+    )
     # summary 模型只需要两类输入：
     # - SystemMessage：压缩规则和输出格式要求。
     # - HumanMessage：被压缩的历史消息，统一包在 <messages> 中，避免和规则混在一起。
     return [
         SystemMessage(content=_compact_prompt()),
-        HumanMessage(content=f"<messages>\n{transcript}\n</messages>{focus_block}"),
+        HumanMessage(
+            content=(
+                f"{update_instruction}"
+                f"{previous_summary_block}"
+                f"<messages>\n{transcript}\n</messages>{focus_block}"
+            )
+        ),
     ]
 
 
@@ -604,24 +657,41 @@ def _clean_summary_model() -> Any:
     _configure_summary_provider_env()
     adapter = os.getenv("LLM_ADAPTER_TYPE", config_str("llm", "adapterType", "anthropic")).strip()
     auth_token = os.getenv("LLM_AUTH_TOKEN", os.getenv("ANTHROPIC_AUTH_TOKEN", "")).strip()
+    base_url = os.getenv("LLM_BASE_URL", config_str("llm", "baseUrl", "")).strip()
     return init_chat_model(
         _summary_model_spec(),
         disable_streaming=True,
-        **provider_model_kwargs(adapter=adapter, auth_token=auth_token),
+        **provider_model_kwargs(adapter=adapter, auth_token=auth_token, base_url=base_url),
     )
 
 
-def _summarize_messages(messages_to_summarize: list[BaseMessage], focus: str = "") -> str:
+def _summarize_messages(
+    messages_to_summarize: list[BaseMessage],
+    focus: str = "",
+    previous_summary: str = "",
+) -> str:
     response = _clean_summary_model().invoke(
-        _summary_request_messages(messages_to_summarize, focus=focus),
+        _summary_request_messages(
+            messages_to_summarize,
+            focus=focus,
+            previous_summary=previous_summary,
+        ),
         config={"callbacks": [], "tags": ["context-compaction-summary"]},
     )
     return _format_compact_summary(_extract_text(response))
 
 
-async def _asummarize_messages(messages_to_summarize: list[BaseMessage], focus: str = "") -> str:
+async def _asummarize_messages(
+    messages_to_summarize: list[BaseMessage],
+    focus: str = "",
+    previous_summary: str = "",
+) -> str:
     response = await _clean_summary_model().ainvoke(
-        _summary_request_messages(messages_to_summarize, focus=focus),
+        _summary_request_messages(
+            messages_to_summarize,
+            focus=focus,
+            previous_summary=previous_summary,
+        ),
         config={"callbacks": [], "tags": ["context-compaction-summary"]},
     )
     return _format_compact_summary(_extract_text(response))
@@ -645,14 +715,7 @@ def _compact_boundary_message(
 
 
 def _summary_message(summary: str) -> SystemMessage:
-    return SystemMessage(
-        content=(
-            "This session is being continued from an earlier conversation that was compacted.\n"
-            "The summary below covers the earlier portion of the conversation.\n\n"
-            f"{summary}\n\n"
-            "Continue the conversation from where it left off without asking the user to repeat context."
-        )
-    )
+    return SystemMessage(content=f"{SUMMARY_MESSAGE_PREFIX}{summary}{SUMMARY_MESSAGE_SUFFIX}")
 
 
 def _build_compacted_messages(
@@ -750,7 +813,17 @@ def _compact_state_now(
     if not messages_to_summarize:
         return {}
 
-    summary = _summarize_messages(messages_to_summarize, focus=focus)
+    summary_index, previous_summary = _find_latest_compact_summary(messages_to_summarize)
+    if summary_index is not None:
+        messages_to_summarize = messages_to_summarize[summary_index + 1 :]
+        if not messages_to_summarize:
+            return {}
+
+    summary = _summarize_messages(
+        messages_to_summarize,
+        focus=focus,
+        previous_summary=previous_summary,
+    )
     return _compact_state_update(
         messages_to_summarize=messages_to_summarize,
         messages_to_keep=messages_to_keep,
@@ -775,7 +848,17 @@ async def _acompact_state_now(
     if not messages_to_summarize:
         return {}
 
-    summary = await _asummarize_messages(messages_to_summarize, focus=focus)
+    summary_index, previous_summary = _find_latest_compact_summary(messages_to_summarize)
+    if summary_index is not None:
+        messages_to_summarize = messages_to_summarize[summary_index + 1 :]
+        if not messages_to_summarize:
+            return {}
+
+    summary = await _asummarize_messages(
+        messages_to_summarize,
+        focus=focus,
+        previous_summary=previous_summary,
+    )
     return _compact_state_update(
         messages_to_summarize=messages_to_summarize,
         messages_to_keep=messages_to_keep,

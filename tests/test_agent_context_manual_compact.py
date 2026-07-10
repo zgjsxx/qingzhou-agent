@@ -8,7 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from agent.commands import AgentCommandMiddleware, CLEAR_RESPONSE, HELP_RESPONSE
-from langchain_core.messages import HumanMessage
+from agent.context import _summary_message, manual_compact_state
+from langchain_core.messages import HumanMessage, SystemMessage
 
 
 class AgentContextManualCompactTest(unittest.TestCase):
@@ -84,6 +85,39 @@ class AgentContextManualCompactTest(unittest.TestCase):
 
         self.assertEqual(update["messages"][0].id, "compact-command")
         self.assertIn("暂无可压缩", response.model_response.result[0].content)
+
+    def test_manual_compact_updates_previous_summary_with_new_messages_only(self):
+        messages = [
+            SystemMessage(content="[Context compacted by manual]"),
+            _summary_message("Summary:\nold deployment facts"),
+            HumanMessage(content="new user request", id="new-user"),
+            HumanMessage(content="new follow-up", id="new-follow-up"),
+        ]
+
+        with patch("agent.context._summarize_messages", return_value="Summary:\nmerged facts") as summarize:
+            update = manual_compact_state(
+                {"messages": messages, "context_usage": {"input_tokens": 456}},
+                messages=messages,
+            )
+
+        summarize.assert_called_once()
+        summarized_messages = summarize.call_args.args[0]
+        self.assertEqual([message.content for message in summarized_messages], ["new user request", "new follow-up"])
+        self.assertEqual(summarize.call_args.kwargs["previous_summary"], "Summary:\nold deployment facts")
+        self.assertEqual(update["compact_metadata"]["summarized_messages"], 2)
+        self.assertIn("Summary:\nmerged facts", update["messages"][2].content)
+
+    def test_manual_compact_skips_when_only_existing_summary_remains(self):
+        messages = [
+            SystemMessage(content="[Context compacted by manual]"),
+            _summary_message("Summary:\nold deployment facts"),
+        ]
+
+        with patch("agent.context._summarize_messages") as summarize:
+            update = manual_compact_state({"messages": messages}, messages=messages)
+
+        summarize.assert_not_called()
+        self.assertEqual(update, {})
 
 
 if __name__ == "__main__":
