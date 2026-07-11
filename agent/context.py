@@ -45,6 +45,7 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
 DEFAULT_COMPACT_MARGIN_TOKENS = 13_000
 DEFAULT_COMPACT_KEEP_MESSAGES = 20
 DEFAULT_MANUAL_COMPACT_KEEP_MESSAGES = 0
+DEFAULT_COMPACT_PROTECT_FIRST_MESSAGES = 3
 DEFAULT_COMPACT_MAX_FAILURES = 3
 DEFAULT_PRUNE_PROTECT_LAST_MESSAGES = 20
 DEFAULT_PRUNE_PROTECT_TAIL_TOKENS = 20_000
@@ -475,23 +476,48 @@ def _tool_prune_state_update(
 def _split_messages_for_compaction(
     messages: list[BaseMessage],
     keep_count: int | None = None,
-) -> tuple[list[BaseMessage], list[BaseMessage]]:
+    *,
+    has_previous_summary: bool = False,
+) -> tuple[list[BaseMessage], list[BaseMessage], list[BaseMessage]]:
     keep_count = _int_env("AGENT_COMPACT_KEEP_MESSAGES", DEFAULT_COMPACT_KEEP_MESSAGES) if keep_count is None else keep_count
-    if keep_count <= 0:
-        return messages, []
-    if len(messages) <= keep_count:
-        return [], messages
+    protect_first = 0 if has_previous_summary else _int_env(
+        "AGENT_COMPACT_PROTECT_FIRST_MESSAGES",
+        DEFAULT_COMPACT_PROTECT_FIRST_MESSAGES,
+        minimum=0,
+    )
 
-    boundary = max(len(messages) - keep_count, 0)
+    head_count = 0
+    if messages and isinstance(messages[0], SystemMessage):
+        content = getattr(messages[0], "content", "")
+        if not (isinstance(content, str) and content.startswith("[Context compacted by ")):
+            head_count = 1
+    head_count = min(len(messages), head_count + protect_first)
+
+    # Do not split a tool_call/tool_result group at the head boundary.
+    while head_count < len(messages) and isinstance(messages[head_count], ToolMessage):
+        head_count += 1
+    while head_count < len(messages) and head_count > 0 and _message_has_tool_calls(messages[head_count - 1]):
+        head_count += 1
+        while head_count < len(messages) and isinstance(messages[head_count], ToolMessage):
+            head_count += 1
+
+    head = messages[:head_count]
+    remaining = messages[head_count:]
+    if keep_count <= 0:
+        return head, remaining, []
+    if len(remaining) <= keep_count:
+        return head, [], remaining
+
+    boundary = max(len(remaining) - keep_count, 0)
 
     # Do not start the kept tail with ToolMessage objects; include their
     # preceding AIMessage so tool_call/tool_result pairs remain valid.
-    while boundary > 0 and isinstance(messages[boundary], ToolMessage):
+    while boundary > 0 and isinstance(remaining[boundary], ToolMessage):
         boundary -= 1
-    if boundary > 0 and _message_has_tool_calls(messages[boundary - 1]):
+    if boundary > 0 and _message_has_tool_calls(remaining[boundary - 1]):
         boundary -= 1
 
-    return messages[:boundary], messages[boundary:]
+    return head, remaining[:boundary], remaining[boundary:]
 
 
 def _safe_content_for_summary(content: Any) -> Any:
@@ -537,8 +563,7 @@ def _compact_prompt() -> str:
     return f"{NO_TOOLS_PREAMBLE}\n\n{BASE_COMPACT_PROMPT}{NO_TOOLS_TRAILER}"
 
 
-def _extract_text(message: BaseMessage) -> str:
-    content = getattr(message, "content", "")
+def _content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -552,6 +577,10 @@ def _extract_text(message: BaseMessage) -> str:
                 parts.append(str(block))
         return "\n".join(parts)
     return str(content)
+
+
+def _extract_text(message: BaseMessage) -> str:
+    return _content_to_text(getattr(message, "content", ""))
 
 
 def _format_compact_summary(text: str) -> str:
@@ -572,14 +601,14 @@ SUMMARY_MESSAGE_SUFFIX = (
 
 
 def _extract_compact_summary_body(message: BaseMessage) -> str:
-    if not isinstance(message, SystemMessage):
-        return ""
     content = getattr(message, "content", "")
-    if not isinstance(content, str) or not content.startswith(SUMMARY_MESSAGE_PREFIX):
+    text = _content_to_text(content)
+    if not text.startswith(SUMMARY_MESSAGE_PREFIX):
         return ""
-    body = content[len(SUMMARY_MESSAGE_PREFIX) :]
-    if body.endswith(SUMMARY_MESSAGE_SUFFIX):
-        body = body[: -len(SUMMARY_MESSAGE_SUFFIX)]
+    body = text[len(SUMMARY_MESSAGE_PREFIX) :]
+    suffix_index = body.find(SUMMARY_MESSAGE_SUFFIX)
+    if suffix_index >= 0:
+        body = body[:suffix_index]
     return body.strip()
 
 
@@ -697,39 +726,82 @@ async def _asummarize_messages(
     return _format_compact_summary(_extract_text(response))
 
 
-def _compact_boundary_message(
-    before_tokens: int | None,
-    summarized_count: int,
-    kept_count: int,
-    trigger: str,
-) -> SystemMessage:
-    return SystemMessage(
-        content=(
-            f"[Context compacted by {trigger}]\n"
-            f"Compacted at: {datetime.now(timezone.utc).isoformat()}\n"
-            f"Before compact input tokens: {before_tokens if before_tokens is not None else 'unknown'}\n"
-            f"Messages summarized: {summarized_count}\n"
-            f"Messages kept: {kept_count}"
-        )
-    )
+def _summary_content(summary: str) -> str:
+    return f"{SUMMARY_MESSAGE_PREFIX}{summary}{SUMMARY_MESSAGE_SUFFIX}"
 
 
-def _summary_message(summary: str) -> SystemMessage:
-    return SystemMessage(content=f"{SUMMARY_MESSAGE_PREFIX}{summary}{SUMMARY_MESSAGE_SUFFIX}")
+def _message_dialog_role(message: BaseMessage) -> str:
+    if isinstance(message, HumanMessage):
+        return "user"
+    if isinstance(message, AIMessage):
+        return "assistant"
+    if isinstance(message, SystemMessage):
+        return "system"
+    if isinstance(message, ToolMessage):
+        return "tool"
+    message_type = getattr(message, "type", "")
+    return {
+        "human": "user",
+        "ai": "assistant",
+        "system": "system",
+        "tool": "tool",
+    }.get(str(message_type), str(message_type))
+
+
+def _summary_message(summary: str, role: str = "assistant") -> BaseMessage:
+    content = _summary_content(summary)
+    if role == "user":
+        return HumanMessage(content=content)
+    if role == "assistant":
+        return AIMessage(content=content)
+    return SystemMessage(content=content)
+
+
+def _prepend_text_to_content(content: Any, text: str) -> Any:
+    if isinstance(content, str):
+        return f"{text}\n\n{content}" if content else text
+    if isinstance(content, list):
+        return [{"type": "text", "text": f"{text}\n\n"}, *content]
+    return f"{text}\n\n{content}" if content is not None else text
+
+
+def _prepend_text_to_message(message: BaseMessage, text: str) -> BaseMessage:
+    content = _prepend_text_to_content(getattr(message, "content", ""), text)
+    if hasattr(message, "model_copy"):
+        return message.model_copy(update={"content": content})
+    return message.copy(update={"content": content})
+
+
+def _merge_or_insert_summary(
+    summary: str,
+    head_messages: list[BaseMessage],
+    tail_messages: list[BaseMessage],
+) -> list[BaseMessage]:
+    last_head_role = _message_dialog_role(head_messages[-1]) if head_messages else ""
+    first_tail_role = _message_dialog_role(tail_messages[0]) if tail_messages else ""
+
+    summary_role = "user" if last_head_role in {"assistant", "tool"} else "assistant"
+    if first_tail_role in {"user", "assistant"} and first_tail_role == summary_role:
+        alternate_role = "assistant" if summary_role == "user" else "user"
+        if alternate_role != last_head_role:
+            summary_role = alternate_role
+        elif tail_messages:
+            merged_tail = [_prepend_text_to_message(tail_messages[0], _summary_content(summary)), *tail_messages[1:]]
+            return [*head_messages, *merged_tail]
+
+    return [*head_messages, _summary_message(summary, role=summary_role), *tail_messages]
 
 
 def _build_compacted_messages(
+    head_messages: list[BaseMessage],
     messages_to_summarize: list[BaseMessage],
     messages_to_keep: list[BaseMessage],
     summary: str,
     before_tokens: int | None,
     trigger: str,
 ) -> list[BaseMessage]:
-    return [
-        _compact_boundary_message(before_tokens, len(messages_to_summarize), len(messages_to_keep), trigger),
-        _summary_message(summary),
-        *messages_to_keep,
-    ]
+    _ = (before_tokens, trigger, messages_to_summarize)
+    return _merge_or_insert_summary(summary, head_messages, messages_to_keep)
 
 
 def _replace_messages_update(messages: list[BaseMessage]) -> list[BaseMessage]:
@@ -759,6 +831,7 @@ def _compact_metadata(
 
 def _compact_state_update(
     *,
+    head_messages: list[BaseMessage],
     messages_to_summarize: list[BaseMessage],
     messages_to_keep: list[BaseMessage],
     summary: str,
@@ -769,6 +842,7 @@ def _compact_state_update(
     # 自动压缩和手动 /compact 最终都从这里生成 LangGraph state update。
     # 这样消息替换、metadata 字段、日志结构保持一套语义，后续改压缩格式时不会出现两边不一致。
     compacted_messages = _build_compacted_messages(
+        head_messages,
         messages_to_summarize,
         messages_to_keep,
         summary,
@@ -778,7 +852,7 @@ def _compact_state_update(
     metadata = _compact_metadata(
         before_tokens=before_tokens,
         summarized_messages=len(messages_to_summarize),
-        kept_messages=len(messages_to_keep),
+        kept_messages=len(head_messages) + len(messages_to_keep),
         trigger=trigger,
         focus=focus,
     )
@@ -786,7 +860,7 @@ def _compact_state_update(
         "context.compact",
         before_tokens=before_tokens,
         summarized_messages=len(messages_to_summarize),
-        kept_messages=len(messages_to_keep),
+        kept_messages=len(head_messages) + len(messages_to_keep),
         trigger=trigger,
         focus_present=bool(focus),
     )
@@ -809,12 +883,18 @@ def _compact_state_now(
     # 这里不再判断是否“应该压缩”，只负责执行压缩动作。
     # 自动触发先用 _should_auto_compact_state 判断，手动 /compact 则直接调用同一个动作入口。
     source_messages = list(messages if messages is not None else (_state_value(state, "messages", []) or []))
-    messages_to_summarize, messages_to_keep = _split_messages_for_compaction(source_messages, keep_count=keep_messages)
+    latest_summary_index, previous_summary = _find_latest_compact_summary(source_messages)
+    head_messages, messages_to_summarize, messages_to_keep = _split_messages_for_compaction(
+        source_messages,
+        keep_count=keep_messages,
+        has_previous_summary=latest_summary_index is not None,
+    )
     if not messages_to_summarize:
         return {}
 
-    summary_index, previous_summary = _find_latest_compact_summary(messages_to_summarize)
+    summary_index, window_previous_summary = _find_latest_compact_summary(messages_to_summarize)
     if summary_index is not None:
+        previous_summary = window_previous_summary
         messages_to_summarize = messages_to_summarize[summary_index + 1 :]
         if not messages_to_summarize:
             return {}
@@ -825,6 +905,7 @@ def _compact_state_now(
         previous_summary=previous_summary,
     )
     return _compact_state_update(
+        head_messages=head_messages,
         messages_to_summarize=messages_to_summarize,
         messages_to_keep=messages_to_keep,
         summary=summary,
@@ -844,12 +925,18 @@ async def _acompact_state_now(
     messages: list[BaseMessage] | None = None,
 ) -> dict[str, Any]:
     source_messages = list(messages if messages is not None else (_state_value(state, "messages", []) or []))
-    messages_to_summarize, messages_to_keep = _split_messages_for_compaction(source_messages, keep_count=keep_messages)
+    latest_summary_index, previous_summary = _find_latest_compact_summary(source_messages)
+    head_messages, messages_to_summarize, messages_to_keep = _split_messages_for_compaction(
+        source_messages,
+        keep_count=keep_messages,
+        has_previous_summary=latest_summary_index is not None,
+    )
     if not messages_to_summarize:
         return {}
 
-    summary_index, previous_summary = _find_latest_compact_summary(messages_to_summarize)
+    summary_index, window_previous_summary = _find_latest_compact_summary(messages_to_summarize)
     if summary_index is not None:
+        previous_summary = window_previous_summary
         messages_to_summarize = messages_to_summarize[summary_index + 1 :]
         if not messages_to_summarize:
             return {}
@@ -860,6 +947,7 @@ async def _acompact_state_now(
         previous_summary=previous_summary,
     )
     return _compact_state_update(
+        head_messages=head_messages,
         messages_to_summarize=messages_to_summarize,
         messages_to_keep=messages_to_keep,
         summary=summary,

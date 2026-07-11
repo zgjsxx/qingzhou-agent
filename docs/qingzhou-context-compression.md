@@ -1,48 +1,207 @@
-# Qingzhou Agent 上下文压缩技术说明
+# Qingzhou 上下文压缩策略
 
-本文记录 Qingzhou Agent 当前的上下文管理与压缩实现。核心代码位于：
+本文只描述 Qingzhou Agent 当前生效的上下文压缩逻辑，不记录代码实现细节。
 
-- `agent/context.py`：token 统计、工具结果裁剪、自动摘要与状态更新。
-- `agent/prompt.py`：上下文摘要提示词。
-- `agent/commands.py`：`/compact`、`/clear` 等控制命令。
-- `agent/graph.py`：上下文中间件注册。
-- `web/src/providers/Stream.tsx`：前端状态类型与清理操作。
+## 总体策略
 
-## 总体流程
+Qingzhou 的上下文管理分两层：
 
-Qingzhou 使用 `AgentContextCompactMiddleware` 在每次模型调用前后管理上下文：
+1. Tool Result Pruning：在不改变对话结构的前提下，缩小历史工具结果和旧工具参数。
+2. Summary Compact：当上下文接近阈值，使用摘要替换中间历史，保留头部和尾部原文。
+
+`DISABLE_COMPACT=true` 会同时关闭自动摘要压缩和工具结果裁剪。
+
+## Tool Result Pruning
+
+工具结果裁剪会在模型调用前运行。它不调用 LLM，不删除普通用户消息或助手消息，只缩小历史工具负载。
+
+默认保护范围：
 
 ```text
-模型调用前
-  1. 裁剪旧工具结果 prune_old_tool_results
-  2. 使用裁剪后的消息检查自动摘要阈值
-  3. 达到阈值时执行 Summary Compact
-  4. 未达到阈值时仅写回工具裁剪结果
-
-模型调用后
-  1. 优先读取 provider 返回的 input_tokens
-  2. 没有 usage 时使用模型 tokenizer 估算
-  3. 将 context_usage 写回 LangGraph state
+至少保留最近 20 条消息
+并尽量保留最近约 20K token 的尾部上下文
 ```
 
-与早期版本不同，当前实现不再按消息数量直接删除中间对话。原 `snip`
-机制已经移除，替换为只缩小旧工具载荷的 Tool Result Pruning。
+可配置项：
 
-## LangGraph State
-
-上下文中间件使用扩展状态 `XuAgentState`：
-
-```python
-class XuAgentState(AgentState):
-    context_usage: ContextUsage
-    compact_metadata: CompactMetadata
-    tool_prune_metadata: ToolPruneMetadata
-    compact_failure_count: int
+```env
+AGENT_TOOL_RESULT_PRUNE_ENABLED=true
+AGENT_TOOL_RESULT_PROTECT_LAST_MESSAGES=20
+AGENT_TOOL_RESULT_PROTECT_TAIL_TOKENS=20000
+AGENT_TOOL_RESULT_PRUNE_MIN_CHARS=200
+AGENT_TOOL_CALL_PRUNE_ARGUMENT_CHARS=500
+AGENT_TOOL_CALL_ARGUMENT_HEAD_CHARS=200
 ```
 
-### context_usage
+裁剪规则：
 
-记录最近一次模型请求的上下文占用：
+- 重复的旧工具结果会替换为重复提示。
+- 保护区以前、超过长度阈值的旧 `ToolMessage` 会替换成一行摘要。
+- 旧 `AIMessage.tool_calls[].args` 过大时，会保留参数结构，但截断长字符串。
+- 工具结果中的图片块会替换成文本占位。
+- 工具调用 id、消息 id 和工具配对关系保持不变。
+
+典型裁剪结果：
+
+```text
+[Duplicate tool output - same content as a more recent call]
+[run_shell_command] ran `pytest` -> exit 0, 80 lines output
+[read_file] read agent/context.py (20,300 chars)
+[screenshot removed to save context]
+```
+
+## 自动摘要压缩
+
+自动摘要压缩根据上一轮模型调用记录的 `input_tokens` 判断是否触发。
+
+默认阈值：
+
+```text
+AGENT_CONTEXT_WINDOW = 128000
+AGENT_COMPACT_MARGIN_TOKENS = 13000
+触发阈值 = 115000 input tokens
+```
+
+可配置项：
+
+```env
+AGENT_AUTO_COMPACT_ENABLED=true
+AGENT_CONTEXT_WINDOW=128000
+AGENT_COMPACT_MARGIN_TOKENS=13000
+AGENT_COMPACT_KEEP_MESSAGES=20
+AGENT_COMPACT_PROTECT_FIRST_MESSAGES=3
+AGENT_COMPACT_MAX_FAILURES=3
+```
+
+关闭自动摘要：
+
+```env
+DISABLE_AUTO_COMPACT=true
+```
+
+## 压缩后的消息结构
+
+摘要压缩后的真实模型上下文采用：
+
+```text
+head + summary + tail
+```
+
+其中：
+
+- `head`：头部原文消息。
+- `summary`：中间历史的压缩摘要。
+- `tail`：最近原文消息。
+
+LangGraph 写回 state 时会额外使用 `RemoveMessage("__remove_all__")` 替换旧消息列表。它是状态更新指令，不是模型会看到的对话消息。
+
+## Head 保留规则
+
+首次压缩默认保留开头 3 条非 system 消息：
+
+```env
+AGENT_COMPACT_PROTECT_FIRST_MESSAGES=3
+```
+
+如果第一条是 system prompt，则 system prompt 总是保留在 head 中。
+
+一旦当前历史中已经存在 previous summary，头部非 system 消息保护会衰减为 0，避免早期用户消息永久保留。system prompt 仍然保留。
+
+head 边界不会切断工具调用组：
+
+- 如果边界落在 `ToolMessage` 上，会向后移动。
+- 如果边界前一条 `AIMessage` 带有 tool calls，会把对应工具结果一起纳入 head。
+
+## Tail 保留规则
+
+自动压缩默认保留最近 20 条消息：
+
+```env
+AGENT_COMPACT_KEEP_MESSAGES=20
+```
+
+手动 `/compact` 默认不保留 tail：
+
+```env
+AGENT_MANUAL_COMPACT_KEEP_MESSAGES=0
+```
+
+如果 tail 第一条是 `ToolMessage`，边界会向前移动，包含对应的 assistant tool call，避免产生孤立工具结果。
+
+## 迭代摘要
+
+如果压缩窗口里已经存在上一轮摘要：
+
+```text
+previous_summary + 新消息 -> 新 summary
+```
+
+上一轮摘要会显式作为 `previous_summary` 提供给摘要模型，新压缩只总结上一轮摘要之后的新消息。
+
+如果除了旧摘要以外没有新消息可压缩，则本次压缩不会执行。
+
+## Summary 角色选择
+
+摘要不会作为 system message 插入。它会根据前后邻居动态选择：
+
+- head 最后一条是 `assistant` 或 `tool`：优先用 `HumanMessage`。
+- 其他情况：优先用 `AIMessage`。
+- 如果这个角色和 tail 第一条冲突，则尝试切换到另一个角色。
+- 如果 `HumanMessage` 和 `AIMessage` 两种角色都会造成相邻角色冲突，则把 summary prepend 到 tail 第一条消息内容里。
+
+因此压缩结果可能是：
+
+```text
+head + AIMessage(summary) + tail
+head + HumanMessage(summary) + tail
+head + merged_summary_into_tail
+```
+
+`ToolMessage` 只参与边界和冲突判断，不会承载 summary。
+
+## 摘要内容
+
+摘要模型会保留：
+
+- 用户主要目标和最新未完成请求。
+- 已完成动作、关键决策和当前状态。
+- 修改、检查或创建过的文件。
+- 重要命令、输出、错误和修复结果。
+- 已解决问题与仍待处理事项。
+- 后续继续工作需要的上下文。
+
+摘要模型输出中的 `<analysis>...</analysis>` 会被移除；如果输出包含 `<summary>...</summary>`，只保留其中内容。
+
+图片、文件等多模态块在进入摘要模型前会替换为文本占位。
+
+## 手动 `/compact`
+
+支持：
+
+```text
+/compact
+/compact 保留数据库迁移和失败测试
+```
+
+手动压缩不检查 token 阈值，直接执行摘要压缩。
+
+带参数的 `/compact <focus>` 会把 focus 传给摘要模型，提示模型优先保留相关内容。
+
+手动压缩和自动压缩共用同一套摘要、消息切分、迭代摘要和写回逻辑。
+
+## 失败处理
+
+压缩或裁剪异常时：
+
+- 当前消息保持不变。
+- `compact_failure_count` 加一。
+- 连续失败达到 `AGENT_COMPACT_MAX_FAILURES` 后停止自动摘要。
+- `/clear` 会重置失败计数。
+- 手动 `/compact` 失败会向用户返回错误信息。
+
+## 状态记录
+
+最近一次上下文统计记录在 `context_usage`：
 
 ```json
 {
@@ -55,27 +214,21 @@ class XuAgentState(AgentState):
 }
 ```
 
-`input_tokens` 用于下一次模型调用前判断是否需要自动摘要。
-
-### compact_metadata
-
-记录最近一次 LLM 摘要压缩：
+最近一次摘要压缩记录在 `compact_metadata`：
 
 ```json
 {
   "last_compacted_at": "2026-07-09T07:00:00+00:00",
   "before_tokens": 116000,
   "summarized_messages": 68,
-  "kept_messages": 20,
+  "kept_messages": 23,
   "failures": 0,
   "trigger": "auto",
   "focus": ""
 }
 ```
 
-### tool_prune_metadata
-
-记录最近一次工具结果裁剪：
+最近一次工具结果裁剪记录在 `tool_prune_metadata`：
 
 ```json
 {
@@ -87,444 +240,7 @@ class XuAgentState(AgentState):
 }
 ```
 
-## Tool Result Pruning
-
-入口：
-
-```python
-prune_old_tool_results(
-    messages: list[BaseMessage],
-) -> tuple[list[BaseMessage], ToolPruneMetadata | None]
-```
-
-该阶段不调用 LLM，不删除 HumanMessage 或普通 AIMessage，只处理历史工具载荷。
-
-### 默认参数
-
-代码默认常量
-```text
-DEFAULT_PRUNE_PROTECT_LAST_MESSAGES = 20
-DEFAULT_PRUNE_PROTECT_TAIL_TOKENS = 20_000
-DEFAULT_PRUNE_MIN_RESULT_CHARS = 200
-DEFAULT_PRUNE_ARGUMENT_CHARS = 500
-DEFAULT_PRUNE_ARGUMENT_HEAD_CHARS = 200
-```
-
-可通过环境变量覆盖：
-
-```env
-AGENT_TOOL_RESULT_PRUNE_ENABLED=true
-AGENT_TOOL_RESULT_PROTECT_LAST_MESSAGES=20
-AGENT_TOOL_RESULT_PROTECT_TAIL_TOKENS=20000
-AGENT_TOOL_RESULT_PRUNE_MIN_CHARS=200
-AGENT_TOOL_CALL_PRUNE_ARGUMENT_CHARS=500
-AGENT_TOOL_CALL_ARGUMENT_HEAD_CHARS=200
-```
-
-`DISABLE_COMPACT=true` 会同时关闭工具裁剪与自动摘要。
-
-### 近期保护边界
-
-中间件从消息末尾向前估算 token。单条消息的粗略估算为：
-
-```text
-(消息内容字符数 + tool_calls JSON 字符数) / 4 + 10
-```
-
-向前扫描直到：
-
-```text
-加入下一条消息会超过保护 token 预算
-并且已经保护至少指定数量的近期消息
-```
-
-因此近期保护范围是：
-
-```text
-至少保留最近 20 条
-并尽量保留最近约 20K token
-```
-
-如果最近 20 条本身已经超过 20K token，仍完整保护 20 条。如果全部历史不足
-20K token，则不会对普通旧工具结果做一行压缩。
-
-### 工具调用索引
-
-LangChain 将工具调用标准化到 `AIMessage.tool_calls`：
-
-```python
-{
-    "id": "call-123",
-    "name": "run_shell_command",
-    "args": {"command": "pytest"},
-    "type": "tool_call",
-}
-```
-
-裁剪器先建立：
-
-```text
-tool_call_id -> (tool_name, args)
-```
-
-随后通过 `ToolMessage.tool_call_id` 找到工具名称和原始参数。消息 ID 和
-`tool_call_id` 不会改变，因此工具调用配对仍然有效。
-
-### 重复结果去重
-
-字符串形式、长度超过阈值的 ToolMessage 会计算 MD5。扫描顺序从新到旧：
-
-- 最新结果保留全文。
-- 较早的相同结果替换为：
-
-```text
-[Duplicate tool output - same content as a more recent call]
-```
-
-去重作用于整个消息列表，包括近期保护区。它只识别完全相同的内容，不做语义去重。
-
-### 旧工具结果一行摘要
-
-保护区以前、长度超过 200 字符的字符串 ToolMessage 会被确定性模板替换。
-
-Shell 与 SSH：
-
-```text
-[run_shell_command] ran `pytest` -> exit 0, 80 lines output
-[run_ssh_command] ran `systemctl status nginx` -> exit 1, 24 lines output
-```
-
-文件工具：
-
-```text
-[read_file] read agent/context.py (20,300 chars)
-[write_file] wrote report.md (120 lines)
-[edit_file] edited report.md (32 chars result)
-```
-
-其他已知工具：
-
-```text
-[glob] matched `**/*.py` (45 lines output)
-[rag_search] query='上下文压缩' (8,200 chars result)
-[web_search] query='LangGraph middleware' (12,000 chars result)
-[playwright_open] https://example.com (1,100 chars result)
-```
-
-未知工具使用通用格式：
-
-```text
-[load_skill] name=pdf (2,829 chars result)
-```
-
-通用格式不会预览名为 `content`、`password`、`private_key`、`token` 或
-`api_key` 的参数。
-
-一行摘要只保存“调用了什么、主要参数、结果规模和退出码”，不会保存完整日志中的
-业务结论。重要错误和决策应由助手回复或后续 LLM 摘要保留。
-
-### 大型调用参数
-
-ToolMessage 变短后，AIMessage 中的调用参数仍可能很大。例如 `write_file`
-可能携带完整文件正文。
-
-对于保护区以前、序列化后超过 500 字符的 `tool_calls[].args`：
-
-1. 递归遍历 dict 和 list。
-2. 超过 200 字符的字符串保留开头并添加 `...[truncated]`。
-3. 数字、布尔值、短字符串和路径保持不变。
-4. 如果递归处理后没有变化，则不写回消息。
-
-LangChain 中的 args 已经是结构化字典，因此裁剪后仍能保持合法工具调用结构。
-
-### 多模态工具结果
-
-保护区以前的 ToolMessage 如果包含以下图片块：
-
-```text
-image
-image_url
-input_image
-```
-
-会替换为：
-
-```json
-{
-  "type": "text",
-  "text": "[screenshot removed to save context]"
-}
-```
-
-同一列表中的非图片内容保持原样。
-
-### 写回与日志
-
-发生裁剪后，中间件使用：
-
-```python
-[
-    RemoveMessage(id=REMOVE_ALL_MESSAGES),
-    *pruned_messages,
-]
-```
-
-替换 LangGraph 中的完整消息列表。普通对话内容保持不变，只是 ToolMessage
-和旧 tool call 参数被换成更小的版本。
-
-同时记录事件：
-
-```text
-context.tool_prune
-```
-
-事件位于 `logs/agent.jsonl`。当前前端会展示裁剪后的工具卡片内容，但尚未直接
-展示 `tool_prune_metadata` 统计。
-
-## 自动 Summary Compact
-
-### token 统计
-
-模型调用完成后，中间件按以下优先级统计：
-
-1. 从响应消息的 `usage_metadata.input_tokens` 获取 provider 真实用量。
-2. 如果 provider 没有返回 usage，调用模型的
-   `get_num_tokens_from_messages(messages, tools=tools)`。
-3. 如果工具参数不被当前 tokenizer 支持，则退回不带 tools 的消息计数。
-4. 统计失败时保存错误信息，本轮不触发自动摘要。
-
-只使用 `input_tokens` 判断上下文压力，避免把生成 token 误算成下一轮输入上下文。
-
-### 触发阈值
-
-默认配置：
-
-```text
-AGENT_CONTEXT_WINDOW = 128000
-AGENT_COMPACT_MARGIN_TOKENS = 13000
-```
-
-阈值：
-
-```text
-threshold = context_window - margin
-          = 128000 - 13000
-          = 115000 input tokens
-```
-
-当上一次记录的 `input_tokens >= 115000` 时，下一次模型调用前执行摘要。
-
-相关配置：
-
-```env
-AGENT_AUTO_COMPACT_ENABLED=true
-AGENT_CONTEXT_WINDOW=128000
-AGENT_COMPACT_MARGIN_TOKENS=13000
-AGENT_COMPACT_KEEP_MESSAGES=20
-AGENT_COMPACT_MAX_FAILURES=3
-```
-
-兼容关闭开关：
-
-```env
-DISABLE_COMPACT=true
-DISABLE_AUTO_COMPACT=true
-```
-
-当前上下文窗口由配置指定，不会根据模型名称自动推断。
-
-### 消息分割
-
-自动摘要默认：
-
-```text
-较早消息 -> 交给摘要模型
-最近 20 条 -> 保留原文
-```
-
-如果保留区域从 ToolMessage 开始，边界会向前移动，纳入对应的 AI tool call，
-避免产生孤立工具结果。
-
-当前自动摘要的尾部保护仍按消息数量计算，没有使用 Tool Result Pruning 的
-20K token 保护算法。
-
-### 摘要模型
-
-默认使用当前主模型，也可单独配置：
-
-```env
-AGENT_SUMMARY_LLM_ADAPTER_TYPE=anthropic
-AGENT_SUMMARY_LLM_MODEL=glm-5.1
-```
-
-摘要模型：
-
-- 禁用 streaming。
-- 不注册工具。
-- callbacks 设为空，避免摘要调用污染主对话回调。
-- 使用 `context-compaction-summary` tag。
-
-摘要请求包含：
-
-```text
-SystemMessage：摘要规则与输出格式
-HumanMessage：被压缩消息序列和可选 focus
-```
-
-图片、文件等多模态块在发送给摘要模型前替换为文字占位符。
-
-### 摘要内容
-
-`BASE_COMPACT_PROMPT` 要求保留：
-
-1. 用户主要请求和意图。
-2. 关键技术概念。
-3. 检查、修改或创建的文件。
-4. 遇到的错误和修复。
-5. 已解决问题和当前排查状态。
-6. 用户消息与重要反馈。
-7. 未完成任务。
-8. 压缩前正在进行的工作。
-9. 与当前任务直接相关的下一步。
-
-模型输出中的 `<analysis>...</analysis>` 会被移除，只保留 `<summary>` 内容。
-
-### 状态替换
-
-摘要成功后，消息列表替换为：
-
-```text
-SystemMessage：压缩触发方式、时间、压缩前 token 和消息数量
-SystemMessage：结构化历史摘要和继续任务的提示
-最近 20 条原始消息
-```
-
-写回使用 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`，因此原始旧消息不再保留在当前
-LangGraph 活跃 state 中。
-
-摘要事件：
-
-```text
-context.compact
-```
-
-## 手动 `/compact`
-
-支持：
-
-```text
-/compact
-/compact 保留数据库迁移和失败测试
-```
-
-该命令由 `AgentCommandMiddleware` 拦截，不发送给主对话模型。
-
-自动压缩和手动压缩复用同一套：
-
-- 摘要模型。
-- 摘要提示词。
-- 消息替换逻辑。
-- metadata。
-- 日志事件。
-
-区别是手动压缩：
-
-- 不检查 token 阈值。
-- `trigger` 记录为 `manual`。
-- 可通过 focus 指示摘要模型优先保留特定主题。
-- 默认 `AGENT_MANUAL_COMPACT_KEEP_MESSAGES=0`，即全部历史进入摘要。
-
-如果希望手动压缩后保留近期原文：
-
-```env
-AGENT_MANUAL_COMPACT_KEEP_MESSAGES=10
-```
-
-## `/clear`
-
-`/clear` 会清除：
-
-- 当前 thread 的全部消息。
-- `context_usage`。
-- `compact_metadata`。
-- `tool_prune_metadata`。
-- `compact_failure_count`。
-- 各消息平台维护的线程内短期历史。
-
-## 失败处理
-
-工具裁剪和摘要过程由中间件统一捕获异常：
-
-```text
-context.compact_error
-```
-
-失败时：
-
-1. 当前消息保持不变。
-2. `compact_failure_count` 加一。
-3. 默认连续失败达到 3 次后停止自动摘要。
-4. `/clear` 会重置失败计数。
-5. 手动 `/compact` 失败会向用户返回错误信息。
-
-当前没有实现：
-
-- 摘要失败冷却时间。
-- 鉴权与网络错误分类。
-- 摘要失败时的本地 fallback。
-- 连续低收益压缩的反抖动机制。
-- 会话级并发压缩锁。
-
-## 前端表现
-
-关闭 `Hide Tool Calls` 时，前端会直接显示写回 state 的裁剪结果：
-
-```text
-[run_shell_command] ran `pip install pdfplumber` -> exit 0, 18 lines output
-[load_skill] name=pdf (2,829 chars result)
-[Duplicate tool output - same content as a more recent call]
-[screenshot removed to save context]
-```
-
-大型调用参数会显示：
-
-```text
-前200字符...[truncated]
-```
-
-开启 `Hide Tool Calls` 后，工具调用和 ToolMessage 均不显示。
-
-当前 `tool_prune_metadata` 已包含在前端 state 类型中，但没有独立的统计面板、
-压缩徽标或提示消息。
-
-## 当前限制
-
-1. Tool Result Pruning 的 token 是字符数近似值，不是模型 tokenizer 的精确结果。
-2. 自动 Summary Compact 的窗口固定为配置值，不会根据模型自动识别。
-3. 自动摘要尾部按固定消息数量保护，不按 token 预算。
-4. 滚动摘要是将旧摘要作为普通历史再次摘要，没有显式的摘要增量更新协议。
-5. 工具摘要模板只保存调用事实，不保证保留完整错误原因。
-6. 多模态列表中的大段文本暂时不会进一步裁剪。
-7. 只处理 LangChain 标准化后的 `AIMessage.tool_calls`。
-8. 尚未对所有原始工具参数执行完整敏感信息脱敏。
-9. `tool_prune_metadata` 暂未在 UI 中可视化。
-
-## 关键日志
-
-Agent 日志默认位于：
-
-```text
-logs/agent.jsonl
-```
-
-启用方式：
-
-```env
-AGENT_LOG_ENABLED=true
-AGENT_LOG_DIR=./logs
-AGENT_LOG_MAX_BYTES=10485760
-AGENT_LOG_BACKUP_COUNT=5
-```
+## 日志事件
 
 常用事件：
 
@@ -532,14 +248,10 @@ AGENT_LOG_BACKUP_COUNT=5
 context.tool_prune
 context.compact
 context.compact_error
-model.start
-model.end
-tool.start
-tool.end
 ```
 
-快速判断是否触发：
+日志默认写入：
 
-```powershell
-Select-String logs\agent.jsonl -Pattern '"event": "context\.(tool_prune|compact|compact_error)"'
+```text
+logs/agent.jsonl
 ```

@@ -8,8 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from agent.commands import AgentCommandMiddleware, CLEAR_RESPONSE, HELP_RESPONSE
-from agent.context import _summary_message, manual_compact_state
-from langchain_core.messages import HumanMessage, SystemMessage
+from agent.context import _merge_or_insert_summary, _summary_message, manual_compact_state
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 
 class AgentContextManualCompactTest(unittest.TestCase):
@@ -66,9 +66,10 @@ class AgentContextManualCompactTest(unittest.TestCase):
         self.assertEqual(update["compact_metadata"]["trigger"], "manual")
         self.assertEqual(update["compact_metadata"]["focus"], "保留 SSH 调试结论")
         self.assertEqual(update["compact_metadata"]["before_tokens"], 1234)
-        self.assertEqual(update["compact_metadata"]["summarized_messages"], 25)
-        self.assertEqual(update["compact_metadata"]["kept_messages"], 0)
+        self.assertEqual(update["compact_metadata"]["summarized_messages"], 22)
+        self.assertEqual(update["compact_metadata"]["kept_messages"], 3)
         self.assertEqual(compacted_messages[0].id, "__remove_all__")
+        self.assertEqual([message.id for message in compacted_messages[1:4]], ["m-0", "m-1", "m-2"])
         self.assertNotIn("/compact 保留 SSH 调试结论", [getattr(message, "content", "") for message in compacted_messages])
         self.assertIn("已压缩上下文", response.model_response.result[0].content)
 
@@ -105,7 +106,7 @@ class AgentContextManualCompactTest(unittest.TestCase):
         self.assertEqual([message.content for message in summarized_messages], ["new user request", "new follow-up"])
         self.assertEqual(summarize.call_args.kwargs["previous_summary"], "Summary:\nold deployment facts")
         self.assertEqual(update["compact_metadata"]["summarized_messages"], 2)
-        self.assertIn("Summary:\nmerged facts", update["messages"][2].content)
+        self.assertIn("Summary:\nmerged facts", update["messages"][1].content)
 
     def test_manual_compact_skips_when_only_existing_summary_remains(self):
         messages = [
@@ -118,6 +119,56 @@ class AgentContextManualCompactTest(unittest.TestCase):
 
         summarize.assert_not_called()
         self.assertEqual(update, {})
+
+    def test_compact_summary_uses_assistant_role_before_user_tail(self):
+        messages = [
+            HumanMessage(content="old user", id="old-user"),
+            AIMessage(content="old assistant", id="old-assistant"),
+            HumanMessage(content="kept user", id="kept-user"),
+        ]
+
+        with patch.dict(
+            "os.environ",
+            {"AGENT_MANUAL_COMPACT_KEEP_MESSAGES": "1", "AGENT_COMPACT_PROTECT_FIRST_MESSAGES": "0"},
+        ):
+            with patch("agent.context._summarize_messages", return_value="Summary:\nrole-aware facts"):
+                update = manual_compact_state({"messages": messages}, messages=messages)
+
+        self.assertIsInstance(update["messages"][1], AIMessage)
+        self.assertIsInstance(update["messages"][2], HumanMessage)
+        self.assertIn("Summary:\nrole-aware facts", update["messages"][1].content)
+
+    def test_compact_summary_uses_user_role_before_assistant_tail(self):
+        messages = [
+            HumanMessage(content="old user", id="old-user"),
+            AIMessage(content="old assistant", id="old-assistant"),
+            AIMessage(content="kept assistant", id="kept-assistant"),
+        ]
+
+        with patch.dict(
+            "os.environ",
+            {"AGENT_MANUAL_COMPACT_KEEP_MESSAGES": "1", "AGENT_COMPACT_PROTECT_FIRST_MESSAGES": "0"},
+        ):
+            with patch("agent.context._summarize_messages", return_value="Summary:\nrole-aware facts"):
+                update = manual_compact_state({"messages": messages}, messages=messages)
+
+        self.assertIsInstance(update["messages"][1], HumanMessage)
+        self.assertIsInstance(update["messages"][2], AIMessage)
+        self.assertIn("Summary:\nrole-aware facts", update["messages"][1].content)
+
+    def test_summary_merges_into_tail_when_both_dialog_roles_conflict(self):
+        compacted = _merge_or_insert_summary(
+            "Summary:\nmerged facts",
+            [AIMessage(content="head assistant")],
+            [HumanMessage(content="tail user", id="tail-user")],
+        )
+
+        self.assertEqual(len(compacted), 2)
+        self.assertIsInstance(compacted[1], HumanMessage)
+        self.assertEqual(compacted[1].id, "tail-user")
+        self.assertTrue(compacted[1].content.startswith("This session is being continued"))
+        self.assertIn("Summary:\nmerged facts", compacted[1].content)
+        self.assertIn("tail user", compacted[1].content)
 
 
 if __name__ == "__main__":
