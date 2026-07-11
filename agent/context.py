@@ -488,9 +488,7 @@ def _split_messages_for_compaction(
 
     head_count = 0
     if messages and isinstance(messages[0], SystemMessage):
-        content = getattr(messages[0], "content", "")
-        if not (isinstance(content, str) and content.startswith("[Context compacted by ")):
-            head_count = 1
+        head_count = 1
     head_count = min(len(messages), head_count + protect_first)
 
     # Do not split a tool_call/tool_result group at the head boundary.
@@ -754,7 +752,7 @@ def _summary_message(summary: str, role: str = "assistant") -> BaseMessage:
         return HumanMessage(content=content)
     if role == "assistant":
         return AIMessage(content=content)
-    return SystemMessage(content=content)
+    raise ValueError(f"Unsupported compact summary role: {role}")
 
 
 def _prepend_text_to_content(content: Any, text: str) -> Any:

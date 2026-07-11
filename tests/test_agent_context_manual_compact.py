@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from agent.commands import AgentCommandMiddleware, CLEAR_RESPONSE, HELP_RESPONSE
 from agent.context import _merge_or_insert_summary, _summary_message, manual_compact_state
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 
 class AgentContextManualCompactTest(unittest.TestCase):
@@ -89,7 +89,6 @@ class AgentContextManualCompactTest(unittest.TestCase):
 
     def test_manual_compact_updates_previous_summary_with_new_messages_only(self):
         messages = [
-            SystemMessage(content="[Context compacted by manual]"),
             _summary_message("Summary:\nold deployment facts"),
             HumanMessage(content="new user request", id="new-user"),
             HumanMessage(content="new follow-up", id="new-follow-up"),
@@ -110,7 +109,6 @@ class AgentContextManualCompactTest(unittest.TestCase):
 
     def test_manual_compact_skips_when_only_existing_summary_remains(self):
         messages = [
-            SystemMessage(content="[Context compacted by manual]"),
             _summary_message("Summary:\nold deployment facts"),
         ]
 
