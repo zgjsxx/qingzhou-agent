@@ -36,9 +36,9 @@ AGENT_TOOL_CALL_ARGUMENT_HEAD_CHARS=200
 裁剪规则：
 
 - 重复工具结果会在全量消息范围内去重：从新到旧扫描，保留最新一份内容，较早的相同 `ToolMessage` 替换为重复提示。这个去重不受保护区限制。
-- 保护区以前、超过长度阈值的旧 `ToolMessage` 会替换成一行摘要。
+- 保护区以前、内容为字符串且超过长度阈值的旧 `ToolMessage` 会替换成一行摘要。
 - 旧 `AIMessage.tool_calls[].args` 过大时，会保留参数结构，但截断长字符串。
-- 工具结果中的图片块会替换成文本占位。
+- 保护区以前、内容为列表的旧 `ToolMessage` 中的图片块会替换成文本占位；剥离图片后不再进一步做一行摘要替换。保护区内的 `ToolMessage` 图片块不受影响。
 - 工具调用 id、消息 id 和工具配对关系保持不变。
 
 典型裁剪结果：
@@ -223,10 +223,11 @@ head + merged_summary_into_tail
   "summarized_messages": 68,
   "kept_messages": 23,
   "failures": 0,
-  "trigger": "auto",
-  "focus": ""
+  "trigger": "auto"
 }
 ```
+
+`focus` 仅在手动 `/compact <focus>` 且 focus 非空时写入。
 
 最近一次工具结果裁剪记录在 `tool_prune_metadata`：
 
