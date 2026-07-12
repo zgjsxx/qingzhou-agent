@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ REFERENCE_RE = re.compile(
 LINE_RANGE_RE = re.compile(r"^(?P<path>.+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
 TRAILING_PUNCTUATION = ".,;!?。，；！？、"
 CLOSING_TO_OPENING = {")": "(", "]": "[", "}": "{", "）": "（", "】": "【"}
+INLINE_REFERENCE_SUFFIXES = ("\u7684\u5185\u5bb9", "\u5185\u5bb9")
+INLINE_REFERENCE_DELIMITERS = ",;!?，。；！？、"
 FENCE_RE = re.compile(r"```")
 
 DEFAULT_MAX_FILE_CHARS = 80_000
@@ -70,6 +73,7 @@ TEXT_EXTENSIONS = {
     ".jsx",
     ".log",
     ".md",
+    ".ps1",
     ".py",
     ".rs",
     ".sh",
@@ -99,6 +103,7 @@ LANGUAGE_BY_EXTENSION = {
     ".json": "json",
     ".jsx": "jsx",
     ".md": "markdown",
+    ".ps1": "powershell",
     ".py": "python",
     ".rs": "rust",
     ".sh": "bash",
@@ -162,9 +167,21 @@ def _strip_wrapping_quotes(value: str) -> str:
     return value
 
 
+def _split_inline_suffix(value: str) -> tuple[str, str]:
+    for suffix in INLINE_REFERENCE_SUFFIXES:
+        if value.endswith(suffix):
+            return value[: -len(suffix)], suffix
+    return value, ""
+
+
 def _trim_target(raw: str) -> tuple[str, str]:
     target = raw
     suffix = ""
+    for index, char in enumerate(target):
+        if char in INLINE_REFERENCE_DELIMITERS:
+            suffix = target[index:]
+            target = target[:index]
+            break
     while target and target[-1] in TRAILING_PUNCTUATION:
         suffix = target[-1] + suffix
         target = target[:-1]
@@ -175,6 +192,7 @@ def _trim_target(raw: str) -> tuple[str, str]:
 
 
 def _parse_file_target(target: str) -> tuple[str, int | None, int | None]:
+    target, _suffix = _split_inline_suffix(target)
     match = LINE_RANGE_RE.match(target)
     if not match:
         return _strip_wrapping_quotes(target), None, None
@@ -199,14 +217,31 @@ def parse_context_references(text: str) -> list[ContextReference]:
     return references
 
 
-def _strip_reference_tokens(text: str) -> str:
-    def replacement(match: re.Match[str]) -> str:
-        raw_target, suffix = _trim_target(match.group("target"))
-        return suffix if raw_target != match.group("target") else ""
+def _normalize_plain_segment(text: str) -> str:
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"[ \t]{2,}", " ", line)
+        line = re.sub(r"\s+([,，.;；:：!?！？、])", r"\1", line)
+        lines.append(line.rstrip())
+    if text.endswith(("\n", "\r")):
+        lines.append("")
+    return "\n".join(lines)
 
-    compacted = REFERENCE_RE.sub(replacement, text)
-    lines = [line.rstrip() for line in compacted.splitlines()]
-    return "\n".join(lines).strip()
+
+def _inline_reference_blocks(text: str, blocks: list[str | None]) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for index, match in enumerate(REFERENCE_RE.finditer(text)):
+        parts.append(_normalize_plain_segment(text[cursor : match.start()]))
+        raw_target, suffix = _trim_target(match.group("target"))
+        _target, inline_suffix = _split_inline_suffix(raw_target)
+        block = blocks[index] if index < len(blocks) else None
+        if block:
+            parts.append(f"\n\n--- Attached Context ---\n\n{block}\n\n")
+        parts.append(_normalize_plain_segment(f"{inline_suffix}{suffix}"))
+        cursor = match.end()
+    parts.append(_normalize_plain_segment(text[cursor:]))
+    return "".join(parts).strip()
 
 
 def _resolve_workspace_path(target: str, cwd: Path, allowed_root: Path) -> Path:
@@ -216,6 +251,39 @@ def _resolve_workspace_path(target: str, cwd: Path, allowed_root: Path) -> Path:
     resolved = target_path.resolve()
     resolved.relative_to(allowed_root)
     return resolved
+
+
+def _allowed_roots(explicit_root: Path | None = None) -> list[Path]:
+    roots = [Path(explicit_root or REPO_ROOT).resolve()]
+    if explicit_root is None:
+        home = Path.home().resolve()
+        if home not in roots:
+            roots.append(home)
+        extra = os.getenv("AGENT_CONTEXT_REF_ALLOWED_ROOTS", "")
+        for item in extra.split(os.pathsep):
+            if not item.strip():
+                continue
+            try:
+                path = Path(item).expanduser().resolve()
+            except OSError:
+                continue
+            if path not in roots:
+                roots.append(path)
+    return roots
+
+
+def _resolve_allowed_path(target: str, cwd: Path, allowed_roots: list[Path]) -> tuple[Path, Path]:
+    target_path = Path(target).expanduser()
+    if not target_path.is_absolute():
+        target_path = cwd / target_path
+    resolved = target_path.resolve()
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root)
+            return resolved, root
+        except ValueError:
+            continue
+    raise ValueError(f"Path escapes allowed roots: {target}")
 
 
 def _relative_label(path: Path, allowed_root: Path) -> str:
@@ -254,13 +322,13 @@ def _safe_fence(content: str) -> str:
 def _read_file_reference(
     reference: ContextReference,
     cwd: Path,
-    allowed_root: Path,
+    allowed_roots: list[Path],
     max_file_chars: int,
 ) -> tuple[str | None, str | None]:
     try:
-        path = _resolve_workspace_path(reference.target, cwd, allowed_root)
+        path, allowed_root = _resolve_allowed_path(reference.target, cwd, allowed_roots)
     except (OSError, ValueError):
-        return None, f"Skipped {reference.raw}: path is outside the workspace."
+        return None, f"Skipped {reference.raw}: path is outside the allowed roots."
     if _is_blocked_path(path, allowed_root):
         return None, f"Skipped {reference.raw}: path is blocked."
     if not path.exists():
@@ -317,13 +385,13 @@ def _format_size(path: Path) -> str:
 def _list_folder_reference(
     reference: ContextReference,
     cwd: Path,
-    allowed_root: Path,
+    allowed_roots: list[Path],
     folder_limit: int,
 ) -> tuple[str | None, str | None]:
     try:
-        path = _resolve_workspace_path(reference.target, cwd, allowed_root)
+        path, allowed_root = _resolve_allowed_path(reference.target, cwd, allowed_roots)
     except (OSError, ValueError):
-        return None, f"Skipped {reference.raw}: path is outside the workspace."
+        return None, f"Skipped {reference.raw}: path is outside the allowed roots."
     if _is_blocked_path(path, allowed_root):
         return None, f"Skipped {reference.raw}: path is blocked."
     if not path.exists():
@@ -382,6 +450,7 @@ def preprocess_context_references(
         return ContextReferenceResult(message=text, references=(), warnings=(), injected_chars=0)
 
     root = Path(allowed_root or REPO_ROOT).resolve()
+    roots = _allowed_roots(root if allowed_root is not None else None)
     base_cwd = Path(cwd or root).resolve()
     try:
         base_cwd.relative_to(root)
@@ -396,33 +465,30 @@ def preprocess_context_references(
     )
     list_limit = folder_limit if folder_limit is not None else _int_env("AGENT_CONTEXT_REF_FOLDER_LIMIT", DEFAULT_FOLDER_LIMIT)
 
-    blocks: list[str] = []
+    blocks: list[str | None] = []
     warnings: list[str] = []
     for reference in references:
         if reference.kind == "file":
-            block, warning = _read_file_reference(reference, base_cwd, root, file_limit)
+            block, warning = _read_file_reference(reference, base_cwd, roots, file_limit)
         else:
-            block, warning = _list_folder_reference(reference, base_cwd, root, list_limit)
+            block, warning = _list_folder_reference(reference, base_cwd, roots, list_limit)
         if warning:
             warnings.append(warning)
-        if block:
-            blocks.append(block)
+        blocks.append(block)
 
-    injected = "\n\n".join(blocks)
+    injected = "\n\n".join(block for block in blocks if block)
     if len(injected) > inject_limit:
         warnings.append(f"Skipped context attachment: expanded context exceeded {inject_limit} characters.")
-        blocks = []
+        blocks = [None for _ in blocks]
         injected = ""
         blocked = True
     else:
         blocked = False
 
-    stripped = _strip_reference_tokens(text)
-    parts = [stripped] if stripped else []
+    message = _inline_reference_blocks(text, blocks)
+    parts = [message] if message else []
     if warnings:
         parts.append("--- Context Reference Warnings ---\n" + "\n".join(f"- {warning}" for warning in warnings))
-    if blocks:
-        parts.append("--- Attached Context ---\n\n" + "\n\n".join(blocks))
     message = "\n\n".join(parts).strip()
     return ContextReferenceResult(
         message=message or text,
@@ -440,11 +506,24 @@ def context_reference_update(state: dict[str, Any]) -> dict[str, Any] | None:
     last = messages[-1]
     if not (isinstance(last, HumanMessage) or getattr(last, "type", None) == "human"):
         return None
-    if not isinstance(getattr(last, "content", None), str):
+    content = getattr(last, "content", None)
+    if not isinstance(content, (str, list)):
         return None
 
-    result = preprocess_context_references(_message_text(last), cwd=Path.cwd(), allowed_root=REPO_ROOT)
-    if not result.references or result.message == getattr(last, "content", ""):
+    original_text = _message_text(last)
+    try:
+        result = preprocess_context_references(original_text, cwd=Path.cwd())
+    except Exception as exc:  # noqa: BLE001 - keep before_model failures visible to the model/user.
+        warning = (
+            f"{original_text}\n\n"
+            "--- Context Reference Warnings ---\n"
+            f"- Failed to expand context references before model call: {exc}"
+        )
+        updated = last.model_copy(update={"content": warning}) if isinstance(last, BaseMessage) else last
+        if getattr(last, "id", None):
+            return {"messages": [updated]}
+        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES, content=""), *messages[:-1], updated]}
+    if not result.references or result.message == _message_text(last):
         return None
 
     updated = last.model_copy(update={"content": result.message}) if isinstance(last, BaseMessage) else last
@@ -460,4 +539,4 @@ class AgentContextReferenceMiddleware(AgentMiddleware):
         return context_reference_update(state)
 
     async def abefore_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
-        return context_reference_update(state)
+        return await asyncio.to_thread(context_reference_update, state)

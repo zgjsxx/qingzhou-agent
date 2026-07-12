@@ -16,7 +16,7 @@ from agent.context_references import (
 )
 
 
-class AgentContextReferencesTest(unittest.TestCase):
+class AgentContextReferencesTest(unittest.IsolatedAsyncioTestCase):
     FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "context_refs"
 
     def test_parse_file_line_range(self):
@@ -57,8 +57,9 @@ class AgentContextReferencesTest(unittest.TestCase):
             allowed_root=self.FIXTURE_ROOT,
         )
 
-        self.assertIn("请解释（）。", result.message)
         self.assertIn("alpha", result.message)
+        self.assertLess(result.message.index("请解释（"), result.message.index("--- Attached Context ---"))
+        self.assertLess(result.message.index("--- Attached Context ---"), result.message.index("）。"))
 
     def test_preprocess_file_reference_applies_line_range(self):
         result = preprocess_context_references(
@@ -94,7 +95,86 @@ class AgentContextReferencesTest(unittest.TestCase):
         )
 
         self.assertIn("Context Reference Warnings", result.message)
-        self.assertIn("outside the workspace", result.message)
+        self.assertIn("outside the allowed roots", result.message)
+
+    def test_parse_file_reference_strips_chinese_content_suffix(self):
+        refs = parse_context_references(r"read @file:C:\Users\Administrator\Desktop\scan_disk.ps1的内容")
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].target, r"C:\Users\Administrator\Desktop\scan_disk.ps1")
+
+    def test_context_reference_update_replaces_text_block_content(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        absolute_path = repo_root / "tests" / "fixtures" / "context_refs" / "a.txt"
+        state = {
+            "messages": [
+                HumanMessage(
+                    content=[{"type": "text", "text": f"read @file:{absolute_path}的内容"}],
+                    id="m-list",
+                )
+            ]
+        }
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(repo_root)
+            update = context_reference_update(state)
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertIsNotNone(update)
+        content = update["messages"][0].content
+        self.assertIsInstance(content, str)
+        self.assertIn("alpha", content)
+        self.assertNotIn("@file:", content)
+
+    def test_context_reference_update_preserves_spaced_chinese_suffix(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        absolute_path = repo_root / "tests" / "fixtures" / "context_refs" / "a.txt"
+        state = {
+            "messages": [
+                HumanMessage(
+                    content=[{"type": "text", "text": f"read @file:{absolute_path}   的内容"}],
+                    id="m-spaced",
+                )
+            ]
+        }
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(repo_root)
+            update = context_reference_update(state)
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertIsNotNone(update)
+        content = update["messages"][0].content
+        self.assertIn("read", content)
+        self.assertIn("alpha", content)
+        self.assertLess(content.index("read"), content.index("--- Attached Context ---"))
+        self.assertLess(content.index("--- Attached Context ---"), content.index("的内容"))
+
+    def test_context_reference_update_preserves_task_description_after_reference(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        absolute_path = repo_root / "tests" / "fixtures" / "context_refs" / "a.txt"
+        state = {
+            "messages": [
+                HumanMessage(
+                    content=f"请帮我分析 @file:{absolute_path}，然后优化一下",
+                    id="m-task",
+                )
+            ]
+        }
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(repo_root)
+            update = context_reference_update(state)
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertIsNotNone(update)
+        content = update["messages"][0].content
+        self.assertIn("alpha", content)
+        self.assertLess(content.index("请帮我分析"), content.index("--- Attached Context ---"))
+        self.assertLess(content.index("--- Attached Context ---"), content.index("然后优化一下"))
 
     def test_context_reference_update_replaces_last_human_message(self):
         state = {"messages": [AIMessage(content="ready"), HumanMessage(content="读 @file:tests/fixtures/context_refs/a.txt", id="m1")]}
@@ -115,6 +195,27 @@ class AgentContextReferencesTest(unittest.TestCase):
         update = middleware.before_model({"messages": [AIMessage(content="@file:a.txt")]}, runtime=None)
 
         self.assertIsNone(update)
+
+    async def test_async_middleware_expands_in_worker_thread(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        state = {
+            "messages": [
+                HumanMessage(
+                    content=[{"type": "text", "text": "read @file:tests/fixtures/context_refs/a.txt"}],
+                    id="m-async",
+                )
+            ]
+        }
+        middleware = AgentContextReferenceMiddleware()
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(repo_root)
+            update = await middleware.abefore_model(state, runtime=None)
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertIsNotNone(update)
+        self.assertIn("alpha", update["messages"][0].content)
 
 
 if __name__ == "__main__":

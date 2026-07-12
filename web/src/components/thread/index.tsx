@@ -87,6 +87,38 @@ function formatCount(value: number): string {
   return String(value);
 }
 
+const CONTEXT_REFERENCE_RE =
+  /(@(?:file|folder):(?:`[^`]+`(?::\d+(?:-\d+)?)?|"[^"]+"(?::\d+(?:-\d+)?)?|'[^']+'(?::\d+(?:-\d+)?)?|[^\s,，。；;!?！？、]+))/gi;
+
+function HighlightedComposerText({ text }: { text: string }) {
+  if (!text) {
+    return <span className="text-muted-foreground">Type your message...</span>;
+  }
+
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(CONTEXT_REFERENCE_RE)) {
+    const value = match[0];
+    const index = match.index ?? 0;
+    if (index > lastIndex) {
+      parts.push(text.slice(lastIndex, index));
+    }
+    parts.push(
+      <span
+        key={`${index}-${value}`}
+        className="rounded bg-sky-500/10 px-0.5 font-semibold text-sky-700 dark:text-sky-300"
+      >
+        {value}
+      </span>,
+    );
+    lastIndex = index + value.length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return <>{parts}</>;
+}
+
 export function Thread() {
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const [artifactOpen, closeArtifact] = useArtifactOpen();
@@ -476,26 +508,34 @@ export function Thread() {
                         blocks={contentBlocks}
                         onRemove={removeBlock}
                       />
-                      <textarea
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onPaste={handlePaste}
-                        onKeyDown={(e) => {
-                          if (
-                            e.key === "Enter" &&
-                            !e.shiftKey &&
-                            !e.metaKey &&
-                            !e.nativeEvent.isComposing
-                          ) {
-                            e.preventDefault();
-                            const el = e.target as HTMLElement | undefined;
-                            const form = el?.closest("form");
-                            form?.requestSubmit();
-                          }
-                        }}
-                        placeholder="Type your message..."
-                        className="field-sizing-content resize-none border-none bg-transparent p-3.5 pb-0 shadow-none ring-0 outline-none focus:ring-0 focus:outline-none"
-                      />
+                      <div className="relative">
+                        <pre
+                          aria-hidden="true"
+                          className="pointer-events-none absolute inset-0 p-3.5 pb-0 font-sans text-base leading-normal break-words whitespace-pre-wrap md:text-sm"
+                        >
+                          <HighlightedComposerText text={input} />
+                        </pre>
+                        <textarea
+                          value={input}
+                          onChange={(e) => setInput(e.target.value)}
+                          onPaste={handlePaste}
+                          onKeyDown={(e) => {
+                            if (
+                              e.key === "Enter" &&
+                              !e.shiftKey &&
+                              !e.metaKey &&
+                              !e.nativeEvent.isComposing
+                            ) {
+                              e.preventDefault();
+                              const el = e.target as HTMLElement | undefined;
+                              const form = el?.closest("form");
+                              form?.requestSubmit();
+                            }
+                          }}
+                          placeholder="Type your message..."
+                          className="caret-foreground relative z-10 field-sizing-content w-full resize-none border-none bg-transparent p-3.5 pb-0 text-transparent shadow-none ring-0 outline-none placeholder:text-transparent focus:ring-0 focus:outline-none"
+                        />
+                      </div>
 
                       <div className="flex flex-wrap items-center gap-4 p-2 pt-4">
                         <div>

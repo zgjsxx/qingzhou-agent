@@ -3,6 +3,7 @@ name = "xu-agent"
 version = "1.2.0"
 requires-python = ">=3.11"
 dependencies = [
+    "ddgs>=9.0",
     "langchain-anthropic>=0.3",
     "langchain>=1.0",
     "langchain-openai>=0.3",

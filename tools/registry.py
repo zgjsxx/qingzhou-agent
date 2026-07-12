@@ -37,6 +37,7 @@ from agent.tasks import (
     task_summary_line,
 )
 from agent.skills import load_skill_content
+from tools.web import web_extract, web_search
 
 DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
@@ -1748,6 +1749,8 @@ ALL_TOOLS = [
     remember,
     rag_rebuild_index,
     rag_search,
+    web_search,
+    web_extract,
     # Temporarily disabled: synchronous subagents are hard to debug when their
     # internal tools trigger interrupts/approval flows. Keep the implementation
     # for a later, explicit subagent lifecycle.
