@@ -74,7 +74,7 @@ function Wait-HttpReady {
 }
 
 if (Test-TrackedProcess) {
-    throw "xu-agent is already running. Use .\stop.ps1 before starting it again."
+    throw "qingzhou-agent is already running. Use .\stop.ps1 before starting it again."
 }
 if (Test-Port 2024) {
     throw "Port 2024 is already in use. Stop the existing backend first."
@@ -165,7 +165,7 @@ catch {
 Write-Host "Frontend is ready."
 
 Write-Host ""
-Write-Host "xu-agent is running at http://127.0.0.1:3000" -ForegroundColor Green
+Write-Host "qingzhou-agent is running at http://127.0.0.1:3000" -ForegroundColor Green
 Write-Host "Logs: $logDir"
 Write-Host "Stop: .\stop.ps1"
 

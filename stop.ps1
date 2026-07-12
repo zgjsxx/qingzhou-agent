@@ -40,7 +40,7 @@ if (Test-Path $pidFile) {
 
 $targets += Get-ListeningProcessIds -Ports @(3000, 2024) | ForEach-Object {
     $process = Get-Process -Id $_ -ErrorAction SilentlyContinue
-    $name = if ($process) { "$($process.ProcessName) on xu-agent port" } else { "process on xu-agent port" }
+    $name = if ($process) { "$($process.ProcessName) on qingzhou-agent port" } else { "process on qingzhou-agent port" }
     @{ Name = $name; Id = $_ }
 }
 
@@ -65,8 +65,8 @@ if (Test-Path $pidFile) {
 }
 
 if ($stopped) {
-    Write-Host "xu-agent stopped." -ForegroundColor Green
+    Write-Host "qingzhou-agent stopped." -ForegroundColor Green
 }
 else {
-    Write-Host "xu-agent is not running."
+    Write-Host "qingzhou-agent is not running."
 }

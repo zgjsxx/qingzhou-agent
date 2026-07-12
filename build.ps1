@@ -45,7 +45,7 @@ function Test-Port {
     }
 }
 
-Write-Host "Building xu-agent..." -ForegroundColor Cyan
+Write-Host "Building qingzhou-agent..." -ForegroundColor Cyan
 
 if (-not $SkipFrontend -and -not $AllowRunning) {
     if (Test-Port 3000) {
@@ -89,4 +89,4 @@ if (-not $SkipFrontend) {
 }
 
 Write-Host ""
-Write-Host "Build completed. Run .\start.ps1 to start xu-agent." -ForegroundColor Green
+Write-Host "Build completed. Run .\start.ps1 to start qingzhou-agent." -ForegroundColor Green
