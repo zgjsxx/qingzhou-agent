@@ -106,7 +106,7 @@ function HighlightedComposerText({ text }: { text: string }) {
     parts.push(
       <span
         key={`${index}-${value}`}
-        className="rounded bg-sky-500/10 px-0.5 font-semibold text-sky-700 dark:text-sky-300"
+        className="rounded bg-sky-500/10 text-sky-700 dark:text-sky-300"
       >
         {value}
       </span>,
@@ -533,7 +533,7 @@ export function Thread() {
                             }
                           }}
                           placeholder="Type your message..."
-                          className="caret-foreground relative z-10 field-sizing-content w-full resize-none border-none bg-transparent p-3.5 pb-0 text-transparent shadow-none ring-0 outline-none placeholder:text-transparent focus:ring-0 focus:outline-none"
+                          className="caret-foreground relative z-10 field-sizing-content w-full resize-none border-none bg-transparent p-3.5 pb-0 font-sans text-base leading-normal break-words whitespace-pre-wrap text-transparent shadow-none ring-0 outline-none placeholder:text-transparent focus:ring-0 focus:outline-none md:text-sm"
                         />
                       </div>
 

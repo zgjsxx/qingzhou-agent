@@ -14,7 +14,7 @@ from agent.context_references import AgentContextReferenceMiddleware
 from agent.logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent.permissions import AgentPermissionMiddleware
 from agent.skills import skill_catalog_for_prompt
-from tools import edit_file, glob_files, load_skill, read_file, run_shell_command, web_extract, web_search, write_file
+from tools import edit_file, glob_files, load_skill, read_file, run_shell_command, search_files, web_extract, web_search, write_file
 
 SUBAGENT_TOOLS = [
     load_skill,
@@ -22,6 +22,7 @@ SUBAGENT_TOOLS = [
     write_file,
     edit_file,
     glob_files,
+    search_files,
     web_search,
     web_extract,
     run_shell_command,

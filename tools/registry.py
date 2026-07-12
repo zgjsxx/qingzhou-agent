@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 import glob as glob_module
+import fnmatch
 import json
 import io
 import posixpath
@@ -1200,6 +1201,212 @@ def glob_files(pattern: str, cwd: str = "", limit: int = 200) -> str:
     return _glob_files_impl(pattern, cwd, limit)
 
 
+SEARCH_SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    ".next",
+    ".runtime",
+    ".langgraph_api",
+    "__pycache__",
+    ".pytest_cache",
+}
+SEARCH_TEXT_EXTENSIONS = {
+    ".bat",
+    ".c",
+    ".cfg",
+    ".conf",
+    ".cpp",
+    ".cs",
+    ".css",
+    ".csv",
+    ".go",
+    ".h",
+    ".hpp",
+    ".html",
+    ".ini",
+    ".java",
+    ".js",
+    ".json",
+    ".jsx",
+    ".log",
+    ".md",
+    ".ps1",
+    ".py",
+    ".rs",
+    ".sh",
+    ".sql",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+SEARCH_MODES = {"content", "files_with_matches", "count"}
+
+
+def _matches_any_glob(path: str, patterns: list[str]) -> bool:
+    normalized = path.replace("\\", "/")
+    for pattern in patterns:
+        normalized_pattern = pattern.replace("\\", "/")
+        if fnmatch.fnmatch(normalized, normalized_pattern):
+            return True
+        if normalized_pattern.startswith("**/") and fnmatch.fnmatch(normalized, normalized_pattern[3:]):
+            return True
+    return False
+
+
+def _split_globs(value: str) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+
+def _looks_like_text_file(path: Path) -> bool:
+    if path.suffix.lower() in SEARCH_TEXT_EXTENSIONS:
+        return True
+    try:
+        chunk = path.read_bytes()[:4096]
+    except OSError:
+        return False
+    return b"\x00" not in chunk
+
+
+def _compile_search_pattern(query: str, regex: bool, case_sensitive: bool) -> re.Pattern[str]:
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pattern = query if regex else re.escape(query)
+    return re.compile(pattern, flags)
+
+
+def _search_files_impl(
+    query: str,
+    cwd: str = "",
+    include: str = "**/*",
+    exclude: str = "",
+    regex: bool = False,
+    case_sensitive: bool = False,
+    context_lines: int = 2,
+    max_results: int = 100,
+    mode: str = "content",
+) -> str:
+    if not query:
+        return "Error: query must not be empty."
+
+    requested_mode = (mode or "content").strip().lower()
+    if requested_mode not in SEARCH_MODES:
+        return "Error: mode must be one of: content, files_with_matches, count."
+
+    include_patterns = _split_globs(include) or ["**/*"]
+    exclude_patterns = _split_globs(exclude)
+    before_after = min(_parse_optional_positive_int(context_lines, 2, minimum=0), 20)
+    limit = min(_parse_optional_positive_int(max_results, 100), 1000)
+
+    try:
+        root = Path(_resolve_cwd(cwd))
+        matcher = _compile_search_pattern(query, regex, case_sensitive)
+    except re.error as exc:
+        return f"Error: invalid regex: {exc}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    files_with_matches: list[str] = []
+    content_blocks: list[str] = []
+    total_matches = 0
+    searched_files = 0
+    omitted_matches = 0
+
+    try:
+        for current, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(name for name in dirnames if name not in SEARCH_SKIP_DIRS)
+            current_path = Path(current)
+            for filename in sorted(filenames):
+                path = current_path / filename
+                relative = _relative_to_root(path, root)
+                if not _matches_any_glob(relative, include_patterns):
+                    continue
+                if exclude_patterns and _matches_any_glob(relative, exclude_patterns):
+                    continue
+                if not _looks_like_text_file(path):
+                    continue
+
+                try:
+                    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                except OSError:
+                    continue
+
+                searched_files += 1
+                matching_indexes = [index for index, line in enumerate(lines) if matcher.search(line)]
+                if not matching_indexes:
+                    continue
+
+                files_with_matches.append(relative)
+                total_matches += len(matching_indexes)
+
+                if requested_mode != "content":
+                    continue
+
+                for match_index in matching_indexes:
+                    if len(content_blocks) >= limit:
+                        omitted_matches += 1
+                        continue
+                    start = max(0, match_index - before_after)
+                    end = min(len(lines), match_index + before_after + 1)
+                    excerpt = [f"{line_no + 1}: {lines[line_no]}" for line_no in range(start, end)]
+                    content_blocks.append(f"{relative}:{match_index + 1}\n" + "\n".join(excerpt))
+    except OSError as exc:
+        return f"Error: failed to search files: {exc}"
+
+    if requested_mode == "count":
+        return f"Search results for: {query}\nFiles searched: {searched_files}\nFiles with matches: {len(files_with_matches)}\nTotal matches: {total_matches}"
+
+    if not files_with_matches:
+        return "(no matches)"
+
+    if requested_mode == "files_with_matches":
+        unique_files = sorted(dict.fromkeys(files_with_matches))
+        omitted_files = max(0, len(unique_files) - limit)
+        shown = unique_files[:limit]
+        if omitted_files:
+            shown.append(f"... ({omitted_files} more files)")
+        return "\n".join(shown)
+
+    output = "\n\n".join(content_blocks)
+    if omitted_matches:
+        output = f"{output}\n\n... ({omitted_matches} more matches)"
+    return output
+
+
+@tool
+def search_files(
+    query: str,
+    cwd: str = "",
+    include: str = "**/*",
+    exclude: str = "",
+    regex: bool = False,
+    case_sensitive: bool = False,
+    context_lines: int = 2,
+    max_results: int = 100,
+    mode: str = "content",
+) -> str:
+    """Search file contents inside the working directory.
+
+    Args:
+        query: Text or regex pattern to search for.
+        cwd: Optional working directory. Empty means the backend process working directory.
+        include: Comma-separated glob patterns to include, for example **/*.py,docs/**/*.md.
+        exclude: Comma-separated glob patterns to exclude.
+        regex: Treat query as a regular expression when true; otherwise search literal text.
+        case_sensitive: Use case-sensitive matching when true.
+        context_lines: Number of lines before and after each match in content mode.
+        max_results: Maximum matches or files returned.
+        mode: Output mode: content, files_with_matches, or count.
+    """
+    return _search_files_impl(query, cwd, include, exclude, regex, case_sensitive, context_lines, max_results, mode)
+
+
 @tool
 def run_shell_command(
     command: str,
@@ -1767,6 +1974,7 @@ ALL_TOOLS = [
     write_file,
     edit_file,
     glob_files,
+    search_files,
     run_shell_command,
     run_ssh_command,
     ssh_upload_file,
