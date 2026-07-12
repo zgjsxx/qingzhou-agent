@@ -10,6 +10,7 @@ from typing import Any
 from langchain.agents import create_agent
 
 from agent.context import AgentContextCompactMiddleware
+from agent.context_references import AgentContextReferenceMiddleware
 from agent.logging import AgentLoggingMiddleware, is_agent_logging_enabled
 from agent.permissions import AgentPermissionMiddleware
 from agent.skills import skill_catalog_for_prompt
@@ -125,6 +126,7 @@ def _invoke_subagent_in_isolated_thread(user_content: str, cwd: str, recursion_l
     # 子 Agent 内部工具调用是否进入父 stream。该模式主要用于定位问题，默认关闭。
     def invoke() -> Any:
         middleware = [
+            AgentContextReferenceMiddleware(),
             AgentContextCompactMiddleware(),
             AgentPermissionMiddleware(interactive=False),
         ]
