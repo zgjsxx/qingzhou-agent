@@ -2,6 +2,8 @@
 param(
     [switch]$SkipBackend,
     [switch]$SkipFrontend,
+    [switch]$WithAsr,
+    [switch]$WarmAsrModel,
     [switch]$AllowRunning
 )
 
@@ -68,6 +70,20 @@ if (-not $SkipBackend) {
     Write-Host "[backend] Installing dependencies..."
     Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "--upgrade", "pip") -WorkingDirectory $root
     Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "-r", "requirements.txt") -WorkingDirectory $root
+
+    if ($WithAsr -or $WarmAsrModel) {
+        $asrRequirements = Join-Path $root "requirements-asr.txt"
+        if (-not (Test-Path $asrRequirements)) {
+            throw "ASR requirements file not found: $asrRequirements"
+        }
+        Write-Host "[backend] Installing optional SenseVoice ASR dependencies..."
+        Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "-r", "requirements-asr.txt") -WorkingDirectory $root
+
+        if ($WarmAsrModel) {
+            Write-Host "[backend] Warming SenseVoice ASR model cache..."
+            Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "agent.asr", "--warm") -WorkingDirectory $root
+        }
+    }
 }
 
 if (-not $SkipFrontend) {

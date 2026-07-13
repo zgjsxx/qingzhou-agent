@@ -17,9 +17,11 @@ import { TooltipIconButton } from "./tooltip-icon-button";
 import {
   ArrowDown,
   LoaderCircle,
+  Mic,
   PanelRightOpen,
   PanelRightClose,
   SquarePen,
+  Square,
   XIcon,
   Plus,
 } from "lucide-react";
@@ -133,6 +135,10 @@ export function Thread() {
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
   const {
     contentBlocks,
     setContentBlocks,
@@ -246,6 +252,100 @@ export function Thread() {
     setInput("");
     setContentBlocks([]);
   };
+
+  const transcribeAudio = useCallback(async (blob: Blob) => {
+    if (!blob.size) return;
+
+    setIsTranscribing(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", blob, "recording.webm");
+      formData.append("language", "auto");
+      const response = await fetch("/api/local/asr", {
+        method: "POST",
+        body: formData,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body?.error || "Speech recognition failed.");
+      }
+      const text = String(body?.text || "").trim();
+      if (!text) {
+        toast.error("No speech recognized.");
+        return;
+      }
+      setInput((current) => {
+        const prefix = current.trim() ? `${current.trimEnd()}\n` : "";
+        return `${prefix}${text}`;
+      });
+    } catch (error) {
+      toast.error("Speech recognition failed.", {
+        description:
+          error instanceof Error ? error.message : "Please try again.",
+        richColors: true,
+        closeButton: true,
+      });
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, []);
+
+  const handleVoiceInput = useCallback(async () => {
+    if (isTranscribing) return;
+
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast.error("Microphone recording is not supported in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      audioChunksRef.current = [];
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
+        setIsRecording(false);
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+        audioChunksRef.current = [];
+        void transcribeAudio(audioBlob);
+      };
+      recorder.onerror = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
+        audioChunksRef.current = [];
+        setIsRecording(false);
+        toast.error("Recording failed. Please try again.");
+      };
+
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      toast.error("Unable to access microphone.", {
+        description:
+          error instanceof Error ? error.message : "Please check browser permissions.",
+        richColors: true,
+        closeButton: true,
+      });
+    }
+  }, [isRecording, isTranscribing, transcribeAudio]);
 
   const handleRegenerate = (
     parentCheckpoint: Checkpoint | null | undefined,
@@ -570,6 +670,30 @@ export function Thread() {
                           accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
                           className="hidden"
                         />
+                        <TooltipIconButton
+                          type="button"
+                          tooltip={
+                            isRecording
+                              ? "Stop recording"
+                              : isTranscribing
+                                ? "Transcribing"
+                                : "Voice input"
+                          }
+                          className={cn(
+                            "size-8",
+                            isRecording && "text-red-600",
+                          )}
+                          disabled={isTranscribing}
+                          onClick={handleVoiceInput}
+                        >
+                          {isTranscribing ? (
+                            <LoaderCircle className="size-5 animate-spin" />
+                          ) : isRecording ? (
+                            <Square className="size-5" />
+                          ) : (
+                            <Mic className="size-5" />
+                          )}
+                        </TooltipIconButton>
                         <div className="ml-auto flex items-center gap-3">
                           <div
                             className="text-muted-foreground bg-background/70 rounded-md border px-2.5 py-1 text-xs whitespace-nowrap"

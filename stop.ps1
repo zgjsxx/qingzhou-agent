@@ -30,7 +30,8 @@ if (Test-Path $pidFile) {
         $tracked = Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json
         $targets += @(
             @{ Name = "frontend"; Id = $tracked.frontendPid },
-            @{ Name = "backend"; Id = $tracked.backendPid }
+            @{ Name = "backend"; Id = $tracked.backendPid },
+            @{ Name = "ASR server"; Id = $tracked.asrPid }
         )
     }
     catch {
@@ -38,7 +39,7 @@ if (Test-Path $pidFile) {
     }
 }
 
-$targets += Get-ListeningProcessIds -Ports @(3000, 2024) | ForEach-Object {
+$targets += Get-ListeningProcessIds -Ports @(3000, 2024, 8765) | ForEach-Object {
     $process = Get-Process -Id $_ -ErrorAction SilentlyContinue
     $name = if ($process) { "$($process.ProcessName) on qingzhou-agent port" } else { "process on qingzhou-agent port" }
     @{ Name = $name; Id = $_ }

@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$NoBrowser,
+    [switch]$WithAsrServer,
+    [int]$AsrPort = 8765,
+    [int]$AsrTimeoutSeconds = 300,
     [int]$BackendTimeoutSeconds = 90,
     [int]$FrontendTimeoutSeconds = 30
 )
@@ -37,7 +40,7 @@ function Test-TrackedProcess {
 
     try {
         $tracked = Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json
-        foreach ($processId in @($tracked.backendPid, $tracked.frontendPid)) {
+        foreach ($processId in @($tracked.backendPid, $tracked.frontendPid, $tracked.asrPid)) {
             if ($processId -and (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
                 return $true
             }
@@ -53,11 +56,15 @@ function Wait-HttpReady {
     param(
         [Parameter(Mandatory = $true)][string]$Url,
         [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
-        [Parameter(Mandatory = $true)][string]$ServiceName
+        [Parameter(Mandatory = $true)][string]$ServiceName,
+        [System.Diagnostics.Process]$Process = $null
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max($TimeoutSeconds, 1))
     while ([DateTime]::UtcNow -lt $deadline) {
+        if ($Process -and $Process.HasExited) {
+            throw "$ServiceName exited before it became ready. Check logs in $logDir."
+        }
         try {
             $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 2
             if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
@@ -73,6 +80,14 @@ function Wait-HttpReady {
     throw "$ServiceName did not become ready within $TimeoutSeconds seconds: $Url"
 }
 
+function Test-AsrServerDependencies {
+    $check = "import importlib.util, sys; missing = [name for name in ('fastapi', 'uvicorn', 'multipart') if importlib.util.find_spec(name) is None]; print(', '.join(missing)); sys.exit(1 if missing else 0)"
+    $output = & $pythonExe -c $check 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "ASR server dependencies are missing: $output. Run .\build.ps1 -WithAsr first."
+    }
+}
+
 if (Test-TrackedProcess) {
     throw "qingzhou-agent is already running. Use .\stop.ps1 before starting it again."
 }
@@ -81,6 +96,9 @@ if (Test-Port 2024) {
 }
 if (Test-Port 3000) {
     throw "Port 3000 is already in use. Stop the existing frontend first."
+}
+if ($WithAsrServer -and (Test-Port $AsrPort)) {
+    throw "Port $AsrPort is already in use. Stop the existing ASR server first."
 }
 if (-not (Test-Path $pythonExe)) {
     throw "Backend environment is missing. Run .\build.ps1 first."
@@ -105,6 +123,44 @@ if ($processPath) {
 
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
+
+$asrProcess = $null
+if ($WithAsrServer) {
+    Test-AsrServerDependencies
+
+    Write-Host "Starting ASR server..."
+    $asrProcess = Start-Process `
+        -FilePath $pythonExe `
+        -ArgumentList @("-m", "agent.asr_server", "--host", "127.0.0.1", "--port", "$AsrPort") `
+        -WorkingDirectory $root `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $logDir "asr.out.log") `
+        -RedirectStandardError (Join-Path $logDir "asr.err.log") `
+        -PassThru
+
+    [ordered]@{
+        backendPid = $null
+        frontendPid = $null
+        asrPid = $asrProcess.Id
+        asrUrl = "http://127.0.0.1:$AsrPort"
+        startedAt = (Get-Date).ToString("o")
+        url = $null
+    } | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
+
+    Write-Host "Waiting for ASR server readiness..."
+    try {
+        Wait-HttpReady `
+            -Url "http://127.0.0.1:$AsrPort/health" `
+            -TimeoutSeconds $AsrTimeoutSeconds `
+            -ServiceName "ASR server" `
+            -Process $asrProcess
+    }
+    catch {
+        & (Join-Path $root "stop.ps1")
+        throw
+    }
+    Write-Host "ASR server is ready."
+}
 
 Write-Host "Starting backend..."
 $backendProcess = Start-Process `
@@ -132,6 +188,9 @@ Write-Host "Backend is ready."
 $env:LANGGRAPH_API_URL = "http://127.0.0.1:2024"
 $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:3000/api"
 $env:NEXT_PUBLIC_ASSISTANT_ID = "agent"
+if ($WithAsrServer) {
+    $env:QINGZHOU_ASR_URL = "http://127.0.0.1:$AsrPort"
+}
 
 Write-Host "Starting frontend..."
 $frontendProcess = Start-Process `
@@ -146,6 +205,8 @@ $frontendProcess = Start-Process `
 $processInfo = [ordered]@{
     backendPid = $backendProcess.Id
     frontendPid = $frontendProcess.Id
+    asrPid = if ($asrProcess) { $asrProcess.Id } else { $null }
+    asrUrl = if ($WithAsrServer) { "http://127.0.0.1:$AsrPort" } else { $null }
     startedAt = (Get-Date).ToString("o")
     url = "http://127.0.0.1:3000"
 }
@@ -166,6 +227,9 @@ Write-Host "Frontend is ready."
 
 Write-Host ""
 Write-Host "qingzhou-agent is running at http://127.0.0.1:3000" -ForegroundColor Green
+if ($WithAsrServer) {
+    Write-Host "ASR server: http://127.0.0.1:$AsrPort"
+}
 Write-Host "Logs: $logDir"
 Write-Host "Stop: .\stop.ps1"
 
