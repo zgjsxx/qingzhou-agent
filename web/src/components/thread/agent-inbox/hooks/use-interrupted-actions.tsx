@@ -12,7 +12,11 @@ import {
   useState,
 } from "react";
 import { Decision, DecisionWithEdits, HITLRequest, SubmitType } from "../types";
-import { buildDecisionFromState, createDefaultHumanResponse } from "../utils";
+import {
+  buildDecisionFromState,
+  buildInterruptResumeValue,
+  createDefaultHumanResponse,
+} from "../utils";
 
 interface UseInterruptedActionsInput {
   interrupt: Interrupt<HITLRequest>;
@@ -90,9 +94,7 @@ export default function useInterruptedActions({
         {},
         {
           command: {
-            resume: {
-              decisions,
-            },
+            resume: buildInterruptResumeValue(interrupt, { decisions }),
           },
         },
       );

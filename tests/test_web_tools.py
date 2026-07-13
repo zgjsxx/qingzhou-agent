@@ -8,7 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tools import registry
 from tools.web import (
+    _ascii_public_http_url,
     _jina_reader_url,
+    _validate_public_http_url,
     web_extract_impl,
     web_search_impl,
 )
@@ -45,6 +47,21 @@ class WebToolsTest(unittest.TestCase):
         self.assertIn("Title: Example", result)
         request.assert_called_once()
         self.assertEqual(request.call_args.args[0], _jina_reader_url("https://example.com/page"))
+
+    def test_web_extract_quotes_non_ascii_urls_for_requests(self):
+        url = "https://zh.wikipedia.org/wiki/颶風芭威_(2026年)"
+        parsed, error = _validate_public_http_url(url)
+        self.assertIsNone(error)
+        assert parsed is not None
+        quoted_url = _ascii_public_http_url(parsed)
+
+        with patch("tools.web._request_text", return_value=("Title: Example\nContent", None)) as request:
+            result = web_extract_impl(url, backend="jina")
+
+        self.assertIn(f"## {url}", result)
+        self.assertIn("%E9%A2%B6%E9%A2%A8%E8%8A%AD%E5%A8%81_", quoted_url)
+        request.assert_called_once()
+        self.assertEqual(request.call_args.args[0], _jina_reader_url(quoted_url))
 
     def test_web_extract_falls_back_to_raw_http(self):
         def fake_request(url, _timeout):

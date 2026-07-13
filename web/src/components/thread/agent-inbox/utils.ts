@@ -1,4 +1,5 @@
 import { BaseMessage, isBaseMessage } from "@langchain/core/messages";
+import { Interrupt } from "@langchain/langgraph-sdk";
 import { format } from "date-fns";
 import { startCase } from "lodash";
 import {
@@ -200,6 +201,13 @@ export function buildDecisionFromState(
   }
 
   return { error: "Unsupported response type." };
+}
+
+export function buildInterruptResumeValue(
+  interrupt: Interrupt<HITLRequest>,
+  value: unknown,
+) {
+  return interrupt.id ? { [interrupt.id]: value } : value;
 }
 
 export function constructOpenInStudioURL(

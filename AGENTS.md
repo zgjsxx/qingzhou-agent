@@ -99,6 +99,8 @@
 - 命令超时后会终止对应进程树。
 - 输出按 UTF-8 解码，遇到非法字节会用替代字符处理。
 - 输出会按 `SHELL_TOOL_MAX_OUTPUT_CHARS` 截断。
+- `cwd` 为空时，命令在 `.agent_outputs/shell/<thread_id>/` 下运行，避免污染项目根目录。
+- 如需操作项目文件，必须显式传入项目内的 `cwd`。
 - 禁止从磁盘根目录发起大范围递归扫描，例如
   `Get-ChildItem D:\ -Recurse` 或 `dir D:\ /s`。
 
@@ -113,13 +115,15 @@
 
 ### `write_file`
 
-向工作目录内写入 UTF-8 文本文件。
+向当前 thread 隔离的 agent 输出目录写入 UTF-8 文本文件。
 
-- `path`：要写入的文件路径
+- `path`：要写入的相对输出路径
 - `content`：写入内容
-- `cwd`：可选工作目录，留空表示后端进程工作目录
+- `cwd`：兼容旧调用的参数；会被忽略
 - 会自动创建父目录
-- 路径会被限制在 `cwd` 内
+- 文件会写入 `.agent_outputs/files/<thread_id>/`
+- 不接受绝对路径，不能通过 `..` 逃出该输出目录
+- `write_file` 不用于修改项目代码；项目内已有文件修改应使用 `edit_file`
 
 ### `edit_file`
 

@@ -44,10 +44,15 @@ DEFAULT_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_OUTPUT_CHARS = 12000
 BACKGROUND_DIR = ROOT_DIR / ".agent_outputs" / "background"
+WRITE_FILES_DIR = ROOT_DIR / ".agent_outputs" / "files"
+SHELL_CWD_DIR = ROOT_DIR / ".agent_outputs" / "shell"
 BACKGROUND_DEFAULT_TIMEOUT_SECONDS = 1800
+WRITE_FILE_OUTPUT_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 BACKGROUND_TASKS_LOCK = threading.Lock()
 BACKGROUND_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 BACKGROUND_CANCEL_REQUESTS: set[str] = set()
+WRITE_FILE_CLEANUP_LOCK = threading.Lock()
+WRITE_FILE_LAST_CLEANUP = 0.0
 TODO_STATUSES = {"pending", "in_progress", "completed"}
 DEFAULT_TODO_THREAD_ID = "__default__"
 CURRENT_TOOL_THREAD_ID: ContextVar[str] = ContextVar(
@@ -101,6 +106,90 @@ def _resolve_safe_path(path: str, cwd: str = "") -> tuple[Path, Path]:
         raise ValueError(f"Path escapes working directory: {path}")
 
     return root, resolved
+
+
+def _safe_storage_id(value: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(value or "").strip())
+    return safe.strip("._-") or DEFAULT_TODO_THREAD_ID
+
+
+def _write_file_thread_dir() -> Path:
+    return WRITE_FILES_DIR / _safe_storage_id(CURRENT_TOOL_THREAD_ID.get())
+
+
+def _shell_thread_dir() -> Path:
+    return SHELL_CWD_DIR / _safe_storage_id(CURRENT_TOOL_THREAD_ID.get())
+
+
+def _write_file_max_age_seconds() -> int:
+    try:
+        configured = int(os.getenv("AGENT_WRITE_FILE_OUTPUT_MAX_AGE_SECONDS", WRITE_FILE_OUTPUT_MAX_AGE_SECONDS))
+    except (TypeError, ValueError):
+        configured = WRITE_FILE_OUTPUT_MAX_AGE_SECONDS
+    return max(configured, 0)
+
+
+def _cleanup_old_write_file_outputs() -> None:
+    global WRITE_FILE_LAST_CLEANUP
+
+    max_age = _write_file_max_age_seconds()
+    if max_age <= 0:
+        return
+
+    now = time.time()
+    if now - WRITE_FILE_LAST_CLEANUP < 60 * 60:
+        return
+
+    with WRITE_FILE_CLEANUP_LOCK:
+        if now - WRITE_FILE_LAST_CLEANUP < 60 * 60:
+            return
+        WRITE_FILE_LAST_CLEANUP = now
+
+        if not WRITE_FILES_DIR.exists():
+            return
+
+        cutoff = now - max_age
+        for file_path in WRITE_FILES_DIR.rglob("*"):
+            try:
+                if file_path.is_file() and file_path.stat().st_mtime < cutoff:
+                    file_path.unlink()
+            except OSError:
+                continue
+
+        for dir_path in sorted(
+            (item for item in WRITE_FILES_DIR.rglob("*") if item.is_dir()),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
+            try:
+                dir_path.rmdir()
+            except OSError:
+                continue
+
+
+def _resolve_write_file_output_path(path: str) -> tuple[Path, Path]:
+    if not path or not path.strip():
+        raise ValueError("Path must not be empty.")
+
+    requested = Path(path).expanduser()
+    if requested.is_absolute():
+        raise ValueError("write_file only accepts relative paths inside the agent output directory.")
+
+    root = _write_file_thread_dir().resolve(strict=False)
+    resolved = (root / requested).resolve(strict=False)
+    if not resolved.is_relative_to(root):
+        raise ValueError("Path escapes the agent output directory.")
+
+    return root, resolved
+
+
+def _resolve_shell_cwd(cwd: str) -> str:
+    if cwd:
+        return _resolve_cwd(cwd)
+
+    shell_cwd = _shell_thread_dir().resolve(strict=False)
+    shell_cwd.mkdir(parents=True, exist_ok=True)
+    return str(shell_cwd)
 
 
 def _relative_to_root(path: Path, root: Path) -> str:
@@ -1104,10 +1193,15 @@ def read_file(path: str, cwd: str = "", limit: int | None = None) -> str:
 
 def _write_file_impl(path: str, content: str, cwd: str = "") -> str:
     try:
-        root, file_path = _resolve_safe_path(path, cwd)
+        _cleanup_old_write_file_outputs()
+        root, file_path = _resolve_write_file_output_path(path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(content, encoding="utf-8")
-        return f"Wrote {len(content.encode('utf-8'))} bytes to {_relative_to_root(file_path, root)}"
+        return (
+            f"Wrote {len(content.encode('utf-8'))} bytes to {_relative_to_root(file_path, root)}\n"
+            f"root: {root}\n"
+            f"path: {file_path}"
+        )
     except OSError as exc:
         return f"Error: failed to write file: {exc}"
     except ValueError as exc:
@@ -1116,12 +1210,12 @@ def _write_file_impl(path: str, content: str, cwd: str = "") -> str:
 
 @tool
 def write_file(path: str, content: str, cwd: str = "") -> str:
-    """Write UTF-8 text to a file inside the working directory.
+    """Write UTF-8 text to the agent output directory for the current thread.
 
     Args:
-        path: File path to write. Relative paths are resolved under cwd.
+        path: Relative output path. Files are stored under .agent_outputs/files/{thread_id}.
         content: Text content to write.
-        cwd: Optional working directory. Empty means the backend process working directory.
+        cwd: Deprecated compatibility parameter. It is ignored; write_file never writes project files.
     """
     return _write_file_impl(path, content, cwd)
 
@@ -1419,7 +1513,7 @@ def run_shell_command(
 
     Args:
         command: Command text to execute.
-        cwd: Optional working directory. Use an empty string for the backend process working directory.
+        cwd: Optional working directory. Empty uses a thread-scoped .agent_outputs/shell directory.
         shell: Shell to use: auto, powershell, cmd, bash, or sh.
         timeout_seconds: Command timeout in seconds, clamped to 1..120.
         run_in_background: If true, start the command in a background worker and return a background task ID.
@@ -1434,7 +1528,7 @@ def run_shell_command(
         )
 
     try:
-        resolved_cwd = _resolve_cwd(cwd)
+        resolved_cwd = _resolve_shell_cwd(cwd)
         selected_shell, argv_prefix = _select_shell(shell)
     except ValueError as exc:
         return f"Error: {exc}"

@@ -7,7 +7,11 @@ import useInterruptedActions from "../hooks/use-interrupted-actions";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useQueryState } from "nuqs";
-import { constructOpenInStudioURL, buildDecisionFromState } from "../utils";
+import {
+  constructOpenInStudioURL,
+  buildDecisionFromState,
+  buildInterruptResumeValue,
+} from "../utils";
 import { Decision, HITLRequest, DecisionType, ActionRequest } from "../types";
 import { useStreamContext } from "@/providers/Stream";
 
@@ -180,7 +184,9 @@ export function ThreadActionsView({
         {},
         {
           command: {
-            resume: { decisions: allDecisions },
+            resume: buildInterruptResumeValue(interrupt, {
+              decisions: allDecisions,
+            }),
           },
         },
       );
@@ -198,7 +204,7 @@ export function ThreadActionsView({
         duration: 5000,
       });
     }
-  }, [actionRequests, hasMultipleActions, stream]);
+  }, [actionRequests, hasMultipleActions, interrupt, stream]);
 
   const handleSubmitAll = useCallback(() => {
     if (!hasMultipleActions) return;
@@ -227,7 +233,9 @@ export function ThreadActionsView({
         {},
         {
           command: {
-            resume: { decisions: allDecisions },
+            resume: buildInterruptResumeValue(interrupt, {
+              decisions: allDecisions,
+            }),
           },
         },
       );
@@ -248,7 +256,7 @@ export function ThreadActionsView({
     } finally {
       setSubmittingAll(false);
     }
-  }, [actionRequests, addressedActions, hasMultipleActions, stream]);
+  }, [actionRequests, addressedActions, hasMultipleActions, interrupt, stream]);
 
   const allAllowApprove = useMemo(() => {
     if (!hasMultipleActions) return false;

@@ -228,6 +228,28 @@ def _validate_public_http_url(url: str) -> tuple[urllib.parse.ParseResult | None
     return parsed, None
 
 
+def _ascii_public_http_url(parsed: urllib.parse.ParseResult) -> str:
+    hostname = (parsed.hostname or "").encode("idna").decode("ascii")
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+
+    userinfo = ""
+    if parsed.username:
+        userinfo = urllib.parse.quote(parsed.username, safe="")
+        if parsed.password:
+            userinfo += ":" + urllib.parse.quote(parsed.password, safe="")
+        userinfo += "@"
+
+    netloc = f"{userinfo}{hostname}"
+    if parsed.port is not None:
+        netloc += f":{parsed.port}"
+
+    path = urllib.parse.quote(parsed.path or "/", safe="/:@!$&'()*+,;=%")
+    query = urllib.parse.quote(parsed.query, safe="/?:@!$&'()*+,;=%")
+    fragment = urllib.parse.quote(parsed.fragment, safe="/?:@!$&'()*+,;=%")
+    return urllib.parse.urlunparse((parsed.scheme, netloc, path, "", query, fragment))
+
+
 def _request_text(url: str, timeout_seconds: int) -> tuple[str | None, str | None]:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/*, */*;q=0.8"})
     try:
@@ -285,16 +307,17 @@ def _extract_one(url: str, backend: str, timeout_seconds: int, max_chars: int) -
     parsed, validation_error = _validate_public_http_url(url)
     if validation_error or parsed is None:
         return f"## {url}\n\nError: {validation_error}."
+    request_url = _ascii_public_http_url(parsed)
 
     selected_backend = backend
     text: str | None = None
     error: str | None = None
     if selected_backend in {"auto", "jina"}:
-        text, error = _extract_with_jina(url, timeout_seconds)
+        text, error = _extract_with_jina(request_url, timeout_seconds)
         if selected_backend == "jina" and error:
             return f"## {url}\n\nError: Jina Reader extraction failed: {error}."
     if text is None and selected_backend in {"auto", "raw"}:
-        text, error = _extract_with_raw_http(url, timeout_seconds)
+        text, error = _extract_with_raw_http(request_url, timeout_seconds)
     if text is None:
         return f"## {url}\n\nError: extraction failed: {error or 'unknown error'}."
 
