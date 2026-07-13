@@ -805,97 +805,6 @@ def _local_output_path(local_path: str, cwd: str = "") -> Path:
     return resolved_local_path
 
 
-def _parse_typeperf_cpu(stdout: str) -> float | None:
-    for line in stdout.splitlines():
-        if not line.startswith('"') or '","' not in line:
-            continue
-        value = line.rsplit(",", 1)[-1].strip().strip('"')
-        try:
-            return float(value)
-        except ValueError:
-            continue
-    return None
-
-
-def _read_proc_cpu_totals() -> tuple[int, int] | None:
-    try:
-        line = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
-    except (OSError, IndexError):
-        return None
-
-    parts = line.split()
-    if not parts or parts[0] != "cpu":
-        return None
-
-    values = [int(value) for value in parts[1:]]
-    idle = values[3] + (values[4] if len(values) > 4 else 0)
-    total = sum(values)
-    return idle, total
-
-
-@tool
-def get_system_cpu_usage(sample_seconds: int = 1) -> str:
-    """Get the current total CPU usage percentage for the backend host.
-
-    Args:
-        sample_seconds: Sampling interval in seconds, clamped to 1..10.
-    """
-    try:
-        sample_seconds = int(sample_seconds)
-    except (TypeError, ValueError):
-        sample_seconds = 1
-    sample_seconds = min(max(sample_seconds, 1), 10)
-
-    if os.name == "nt":
-        typeperf = shutil.which("typeperf")
-        if typeperf:
-            completed = _run_process(
-                [typeperf, r"\Processor(_Total)\% Processor Time", "-sc", "1"],
-                timeout=sample_seconds + 10,
-            )
-            cpu = _parse_typeperf_cpu(completed.stdout)
-            if cpu is not None:
-                return f"当前系统 CPU 占用约为 {cpu:.1f}%。"
-
-        powershell = shutil.which("pwsh") or shutil.which("powershell")
-        if powershell:
-            completed = _run_process(
-                [
-                    powershell,
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    (
-                        "Get-Counter '\\Processor(_Total)\\% Processor Time' "
-                        f"-SampleInterval {sample_seconds} -MaxSamples 1 | "
-                        "Select-Object -ExpandProperty CounterSamples | "
-                        "Select-Object -ExpandProperty CookedValue"
-                    ),
-                ],
-                timeout=sample_seconds + 10,
-            )
-            try:
-                cpu = float(completed.stdout.strip().splitlines()[-1])
-                return f"当前系统 CPU 占用约为 {cpu:.1f}%。"
-            except (IndexError, ValueError):
-                pass
-
-        return "Error: unable to read CPU usage with typeperf or PowerShell Get-Counter."
-
-    first = _read_proc_cpu_totals()
-    if first:
-        time.sleep(sample_seconds)
-        second = _read_proc_cpu_totals()
-        if second:
-            idle_delta = second[0] - first[0]
-            total_delta = second[1] - first[1]
-            if total_delta > 0:
-                cpu = 100 * (1 - idle_delta / total_delta)
-                return f"当前系统 CPU 占用约为 {cpu:.1f}%。"
-
-    return "Error: unable to read CPU usage from /proc/stat."
-
-
 @tool
 def todo_write(todos: list[dict[str, str]]) -> str:
     """Replace the current thread's todo list for multi-step work.
@@ -1003,6 +912,35 @@ def run_subagent(description: str, cwd: str = "", max_steps: int | None = None) 
     from agent.subagent import spawn_subagent
 
     return spawn_subagent(description=description, cwd=cwd, max_steps=max_steps)
+
+
+@tool
+def delegate_task(
+    goal: str = "",
+    context: str = "",
+    tasks: list[dict] | None = None,
+    cwd: str = "",
+    mode: str = "readonly",
+    max_steps: int | None = None,
+) -> str:
+    """Delegate one or more focused subtasks to isolated leaf subagents.
+
+    Use this for reasoning-heavy subtasks, code review, file investigation,
+    research synthesis, or parallel independent workstreams. Subagents do not
+    inherit the parent conversation; pass all relevant file paths, constraints,
+    errors, and output language requirements in goal/context.
+
+    Args:
+        goal: Single subtask goal. Ignored when tasks is provided.
+        context: Background information shared with the subagent(s).
+        tasks: Optional list of task objects with goal, context, and mode.
+        cwd: Optional working directory hint for file and shell tools.
+        mode: readonly or workspace_write. workspace_write enables edit_file.
+        max_steps: Optional maximum subagent reasoning/tool steps.
+    """
+    from agent.subagent import delegate_task as run_delegate_task
+
+    return run_delegate_task(goal=goal, context=context, tasks=tasks, cwd=cwd, mode=mode, max_steps=max_steps)
 
 
 @tool
@@ -2043,18 +1981,18 @@ def cancel_background_task(task_id: str) -> str:
 
 
 ALL_TOOLS = [
-    get_system_cpu_usage,
     todo_write,
     load_skill,
     compact,
     remember,
     rag_rebuild_index,
     rag_search,
+    delegate_task,
+    # MOA scaffold exists in agent/moa.py but is intentionally not registered.
+    # It is too token-expensive for the current personal-agent workflow.
     web_search,
     web_extract,
-    # Temporarily disabled: synchronous subagents are hard to debug when their
-    # internal tools trigger interrupts/approval flows. Keep the implementation
-    # for a later, explicit subagent lifecycle.
+    # Legacy compatibility wrapper; prefer delegate_task for new multi-agent work.
     run_subagent,
     create_task,
     list_tasks,

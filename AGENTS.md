@@ -39,14 +39,6 @@
 
 当前工具列表由 `tools/registry.py` 中的 `ALL_TOOLS` 定义。
 
-### `get_system_cpu_usage`
-
-返回宿主机整体 CPU 使用率百分比。
-
-- Windows：优先尝试 `typeperf`，然后回退到 PowerShell `Get-Counter`
-- Linux 类系统：读取 `/proc/stat` 采样
-- 采样间隔限制在 `1..10` 秒
-
 ### `todo_write`
 
 维护当前 thread/session 的任务清单，用于多步骤任务的计划和进度同步。
