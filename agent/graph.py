@@ -24,6 +24,7 @@ from agent.permissions import AgentPermissionMiddleware
 from agent.prompt import build_prompt_context, get_system_prompt
 from agent.llm_config import configure_provider_env, provider_model_kwargs
 from agent.skills import skill_catalog_for_prompt
+from agent.tts import tts_enabled, warm_tts_engine
 from tools import ALL_TOOLS
 from gateway.platforms.botpy import start_botpy_bridge
 from gateway.platforms.discord import start_discord_bridge
@@ -56,6 +57,13 @@ def configure_llm_provider_env() -> None:
 
 
 configure_llm_provider_env()
+if tts_enabled():
+    try:
+        print("[qingzhou-agent] warming TTS engine...", file=sys.stderr, flush=True)
+        warm_tts_engine()
+        print("[qingzhou-agent] TTS engine ready.", file=sys.stderr, flush=True)
+    except Exception as exc:  # noqa: BLE001 - optional TTS must not block backend startup.
+        print(f"[qingzhou-agent] TTS warm failed: {exc}", file=sys.stderr, flush=True)
 
 MODEL_SPEC = f"{LLM_ADAPTER_TYPE}:{LLM_MODEL}"
 MODEL = (

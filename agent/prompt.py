@@ -203,6 +203,13 @@ PROMPT_SECTIONS = {
         "注意：链接必须包含 /api/local/downloads/ 前缀，不能直接使用文件路径作为 URL。\n"
         "只对最终产出物提供下载链接，中间临时文件不需要。"
     ),
+    "voice_reply": (
+        "When the user explicitly asks for a voice, spoken, audio, or read-aloud answer, "
+        "first compose the final answer text, then call synthesize_speech_reply(text) with that same text. "
+        "Include the returned [[qingzhou-audio:{...}]] marker exactly once in the final answer. "
+        "Do not put the marker in a code block and do not modify its JSON. "
+        "If the tool is unavailable, explain that voice replies require starting with .\\start.ps1 -WithAsr."
+    ),
 }
 
 _LAST_CONTEXT_KEY: str | None = None
@@ -256,6 +263,8 @@ def assemble_system_prompt(context: dict[str, Any]) -> str:
         sections.append(PROMPT_SECTIONS["kanban"])
     if {"list_background_tasks", "get_background_task", "cancel_background_task", "run_shell_command"} <= tool_names:
         sections.append(PROMPT_SECTIONS["background_tasks"])
+    if "synthesize_speech_reply" in tool_names:
+        sections.append(PROMPT_SECTIONS["voice_reply"])
     if any(name.startswith("mcp__") for name in tool_names):
         sections.append(PROMPT_SECTIONS["mcp"])
     if "run_ssh_command" in tool_names:

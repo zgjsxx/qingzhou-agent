@@ -9,11 +9,66 @@ import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { cn } from "@/lib/utils";
 import { ToolCalls, ToolResult } from "./tool-calls";
 import { MessageContentComplex } from "@langchain/core/messages";
-import { Fragment, memo } from "react";
+import { Fragment, memo, useMemo } from "react";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
 import { GenericInterruptView } from "./generic-interrupt";
 import { useArtifact } from "../artifact-hooks";
+
+const AUDIO_MARKER_REGEX = /\[\[qingzhou-audio:({.*?})\]\]/g;
+
+interface VoiceReplyAudio {
+  url: string;
+  filename?: string;
+  voice?: string;
+}
+
+function parseVoiceReplyAudio(content: string): {
+  text: string;
+  audioItems: VoiceReplyAudio[];
+} {
+  const audioItems: VoiceReplyAudio[] = [];
+  const text = content
+    .replace(AUDIO_MARKER_REGEX, (_match, payloadText: string) => {
+      try {
+        const payload = JSON.parse(payloadText) as Record<string, unknown>;
+        const url = typeof payload.url === "string" ? payload.url : "";
+        if (url.startsWith("/api/local/downloads/")) {
+          audioItems.push({
+            url,
+            filename:
+              typeof payload.filename === "string" ? payload.filename : undefined,
+            voice: typeof payload.voice === "string" ? payload.voice : undefined,
+          });
+        }
+      } catch {
+        return "";
+      }
+      return "";
+    })
+    .trim();
+
+  return { text, audioItems };
+}
+
+function VoiceReplyPlayer({ audio }: { audio: VoiceReplyAudio }) {
+  return (
+    <div className="border-border bg-muted/30 mt-2 max-w-xl rounded-lg border px-3 py-2">
+      <audio
+        className="w-full"
+        controls
+        autoPlay
+        preload="metadata"
+        src={audio.url}
+      />
+      {(audio.filename || audio.voice) && (
+        <div className="text-muted-foreground mt-1 truncate text-xs">
+          {[audio.filename, audio.voice].filter(Boolean).join(" · ")}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CustomComponent({ message }: { message: Message }) {
   const artifact = useArtifact();
@@ -162,6 +217,10 @@ export const AssistantMessage = memo(function AssistantMessage({
 }: AssistantMessageProps) {
   const content = message?.content ?? [];
   const contentString = getContentString(content);
+  const { text: displayContent, audioItems } = useMemo(
+    () => parseVoiceReplyAudio(contentString),
+    [contentString],
+  );
   const anthropicStreamedToolCalls = Array.isArray(content)
     ? parseAnthropicStreamedToolCalls(content)
     : undefined;
@@ -197,11 +256,15 @@ export const AssistantMessage = memo(function AssistantMessage({
           </>
         ) : (
           <>
-            {contentString.length > 0 && (
+            {displayContent.length > 0 && (
               <div className="py-1">
-                <MarkdownText>{contentString}</MarkdownText>
+                <MarkdownText>{displayContent}</MarkdownText>
               </div>
             )}
+
+            {audioItems.map((audio) => (
+              <VoiceReplyPlayer key={audio.url} audio={audio} />
+            ))}
 
             {!hideToolCalls && (
               <>
@@ -241,7 +304,7 @@ export const AssistantMessage = memo(function AssistantMessage({
                   isLoading={isLoading}
                 />
                 <CommandBar
-                  content={contentString}
+                  content={displayContent}
                   isLoading={isLoading}
                   isAiMessage={true}
                   handleRegenerate={() => handleRegenerate(parentCheckpoint)}

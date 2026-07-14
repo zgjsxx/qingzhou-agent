@@ -25,6 +25,10 @@ const MIME_MAP: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
   gif: "image/gif",
+  wav: "audio/wav",
+  mp3: "audio/mpeg",
+  ogg: "audio/ogg",
+  webm: "audio/webm",
   zip: "application/zip",
 };
 
@@ -37,13 +41,14 @@ function getAsciiFallback(filename: string): string {
   return filename.replace(/[^\x20-\x7E]/g, "_") || "download";
 }
 
-function formatContentDisposition(filename: string): string {
+function formatContentDisposition(filename: string, mimeType: string): string {
   const asciiFallback = getAsciiFallback(filename);
   const encoded = encodeURIComponent(filename);
+  const disposition = mimeType.startsWith("audio/") ? "inline" : "attachment";
   if (asciiFallback === filename) {
-    return `attachment; filename="${filename}"`;
+    return `${disposition}; filename="${filename}"`;
   }
-  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+  return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
 
 /**
@@ -145,7 +150,7 @@ export async function GET(
     status: 200,
     headers: {
       "Content-Type": mimeType,
-      "Content-Disposition": formatContentDisposition(filename),
+      "Content-Disposition": formatContentDisposition(filename, mimeType),
       "Content-Length": String(buffer.length),
     },
   });

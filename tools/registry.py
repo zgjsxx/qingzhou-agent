@@ -38,6 +38,7 @@ from agent.tasks import (
     task_summary_line,
 )
 from agent.skills import load_skill_content
+from agent.tts import synthesize_speech, tts_enabled
 from tools.web import web_extract, web_search
 
 DEFAULT_TIMEOUT_SECONDS = 30
@@ -843,6 +844,42 @@ def load_skill(name: str) -> str:
         name: Skill registry name from the skill catalog.
     """
     return load_skill_content(name)
+
+
+@tool
+def synthesize_speech_reply(text: str, voice: str = "") -> str:
+    """Synthesize the assistant's reply text into local audio for Web playback.
+
+    Use this only when the user explicitly asks for a voice/audio spoken answer.
+    First write the answer text normally, then call this tool with that same answer text.
+    After the tool returns, include the returned audio marker exactly once in the final answer.
+
+    Args:
+        text: The final answer text to synthesize.
+        voice: Optional installed local voice name.
+    """
+    if not tts_enabled():
+        return (
+            "Error: voice reply is not enabled. Restart with .\\start.ps1 -WithAsr "
+            "to enable local voice replies."
+        )
+
+    result = synthesize_speech(text, voice=voice)
+    path = Path(str(result["path"]))
+    rel_path = path.relative_to(ROOT_DIR).as_posix()
+    payload = {
+        "url": f"/api/local/downloads/{rel_path}",
+        "filename": result.get("filename", path.name),
+        "format": result.get("format", "wav"),
+        "provider": result.get("provider", ""),
+        "voice": result.get("voice", ""),
+        "size": result.get("size", 0),
+    }
+    marker = f"[[qingzhou-audio:{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}]]"
+    return (
+        "Voice reply audio generated. Include this marker exactly once in your final answer:\n"
+        f"{marker}"
+    )
 
 
 @tool
@@ -2226,6 +2263,9 @@ ALL_TOOLS = [
     get_background_task,
     cancel_background_task,
 ]
+
+if tts_enabled():
+    ALL_TOOLS.append(synthesize_speech_reply)
 
 if _bool_env("AGENT_PLAYWRIGHT_ENABLED"):
     from tools.playwright import PLAYWRIGHT_TOOLS, set_thread_id_getter

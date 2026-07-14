@@ -4,6 +4,9 @@ param(
     [switch]$SkipFrontend,
     [switch]$WithAsr,
     [switch]$WarmAsrModel,
+    [switch]$WithTts,
+    [switch]$WarmTtsEngine,
+    [string]$Python = "",
     [switch]$AllowRunning
 )
 
@@ -12,6 +15,8 @@ $root = $PSScriptRoot
 $frontendDir = Join-Path $root "web"
 $venvDir = Join-Path $root ".venv"
 $pythonExe = Join-Path $venvDir "Scripts\python.exe"
+$pythonBootstrap = if ($Python) { $Python } elseif ($env:QINGZHOU_BUILD_PYTHON) { $env:QINGZHOU_BUILD_PYTHON } else { "python" }
+$buildTempDir = Join-Path $root ".agent_outputs\tmp"
 
 function Invoke-Checked {
     param(
@@ -47,7 +52,29 @@ function Test-Port {
     }
 }
 
+function Get-PythonMinorVersion {
+    param([Parameter(Mandatory = $true)][string]$FilePath)
+
+    $output = & $FilePath -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to inspect Python version: $FilePath"
+    }
+    return [version]($output | Select-Object -First 1)
+}
+
+function Assert-VoicePythonVersion {
+    $version = Get-PythonMinorVersion -FilePath $pythonExe
+    if ($version.Major -ne 3 -or $version.Minor -lt 11 -or $version.Minor -ge 13) {
+        throw "Voice dependencies require Python 3.11 or 3.12 on Windows. Current venv uses Python $version at $pythonExe. Recreate .venv with Python 3.11/3.12, for example: .\build.ps1 -Python C:\Path\To\python.exe -WithAsr"
+    }
+}
+
 Write-Host "Building qingzhou-agent..." -ForegroundColor Cyan
+$withAsrDeps = $WithAsr -or $WarmAsrModel
+$withTtsDeps = $WithTts -or $WarmTtsEngine -or $WithAsr -or $WarmAsrModel
+New-Item -ItemType Directory -Force -Path $buildTempDir | Out-Null
+$env:TEMP = $buildTempDir
+$env:TMP = $buildTempDir
 
 if (-not $SkipFrontend -and -not $AllowRunning) {
     if (Test-Port 3000) {
@@ -57,8 +84,14 @@ if (-not $SkipFrontend -and -not $AllowRunning) {
 
 if (-not $SkipBackend) {
     if (-not (Test-Path $pythonExe)) {
+        if ($withAsrDeps) {
+            $bootstrapVersion = Get-PythonMinorVersion -FilePath $pythonBootstrap
+            if ($bootstrapVersion.Major -ne 3 -or $bootstrapVersion.Minor -lt 11 -or $bootstrapVersion.Minor -ge 13) {
+                throw "Voice dependencies require Python 3.11 or 3.12 on Windows. Selected bootstrap Python is $bootstrapVersion ($pythonBootstrap). Run .\build.ps1 -Python C:\Path\To\Python312\python.exe -WithAsr."
+            }
+        }
         Write-Host "[backend] Creating Python virtual environment..."
-        Invoke-Checked -FilePath "python" -ArgumentList @("-m", "venv", $venvDir) -WorkingDirectory $root
+        Invoke-Checked -FilePath $pythonBootstrap -ArgumentList @("-m", "venv", $venvDir) -WorkingDirectory $root
     }
 
     & $pythonExe -m pip --version *> $null
@@ -71,7 +104,9 @@ if (-not $SkipBackend) {
     Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "--upgrade", "pip") -WorkingDirectory $root
     Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "-r", "requirements.txt") -WorkingDirectory $root
 
-    if ($WithAsr -or $WarmAsrModel) {
+    if ($withAsrDeps) {
+        Assert-VoicePythonVersion
+
         $asrRequirements = Join-Path $root "requirements-asr.txt"
         if (-not (Test-Path $asrRequirements)) {
             throw "ASR requirements file not found: $asrRequirements"
@@ -82,6 +117,27 @@ if (-not $SkipBackend) {
         if ($WarmAsrModel) {
             Write-Host "[backend] Warming SenseVoice ASR model cache..."
             Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "agent.asr", "--warm") -WorkingDirectory $root
+        }
+    }
+
+    if ($withTtsDeps) {
+        $ttsRequirements = Join-Path $root "requirements-tts.txt"
+        if (-not (Test-Path $ttsRequirements)) {
+            throw "TTS requirements file not found: $ttsRequirements"
+        }
+        Write-Host "[backend] Installing optional pyttsx3 TTS dependencies..."
+        Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "-r", "requirements-tts.txt") -WorkingDirectory $root
+
+        if ($WarmTtsEngine) {
+            Write-Host "[backend] Warming pyttsx3 TTS engine..."
+            $previousProvider = $env:AGENT_TTS_PROVIDER
+            try {
+                $env:AGENT_TTS_PROVIDER = "pyttsx3"
+                Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "agent.tts", "--warm") -WorkingDirectory $root
+            }
+            finally {
+                $env:AGENT_TTS_PROVIDER = $previousProvider
+            }
         }
     }
 }

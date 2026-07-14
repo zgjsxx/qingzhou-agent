@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$NoBrowser,
+    [switch]$WithAsr,
     [switch]$WithAsrServer,
+    [switch]$WithTts,
     [int]$AsrPort = 8765,
     [int]$AsrTimeoutSeconds = 300,
     [int]$BackendTimeoutSeconds = 180,
@@ -17,6 +19,7 @@ $pidFile = Join-Path $runtimeDir "pids.json"
 $pythonExe = Join-Path $root ".venv\Scripts\python.exe"
 $nextExe = Join-Path $frontendDir "node_modules\.bin\next.CMD"
 $nextBuild = Join-Path $frontendDir ".next"
+$enableAsrServer = $WithAsr -or $WithAsrServer
 
 function Test-Port {
     param([int]$Port)
@@ -88,6 +91,29 @@ function Test-AsrServerDependencies {
     }
 }
 
+function Get-PythonMinorVersion {
+    $output = & $pythonExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to inspect Python version: $pythonExe"
+    }
+    return [version]($output | Select-Object -First 1)
+}
+
+function Assert-VoicePythonVersion {
+    $version = Get-PythonMinorVersion
+    if ($version.Major -ne 3 -or $version.Minor -lt 11 -or $version.Minor -ge 13) {
+        throw "Voice dependencies require Python 3.11 or 3.12 on Windows. Current venv uses Python $version at $pythonExe. Recreate .venv with Python 3.11/3.12, then run .\build.ps1 -WithAsr."
+    }
+}
+
+function Test-TtsDependencies {
+    $check = "import importlib.util, sys; missing = [name for name in ('pyttsx3',) if importlib.util.find_spec(name) is None]; print(', '.join(missing)); sys.exit(1 if missing else 0)"
+    $output = & $pythonExe -c $check 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "TTS dependencies are missing: $output. Run .\build.ps1 -WithAsr first."
+    }
+}
+
 if (Test-TrackedProcess) {
     throw "qingzhou-agent is already running. Use .\stop.ps1 before starting it again."
 }
@@ -97,7 +123,7 @@ if (Test-Port 2024) {
 if (Test-Port 3000) {
     throw "Port 3000 is already in use. Stop the existing frontend first."
 }
-if ($WithAsrServer -and (Test-Port $AsrPort)) {
+if ($enableAsrServer -and (Test-Port $AsrPort)) {
     throw "Port $AsrPort is already in use. Stop the existing ASR server first."
 }
 if (-not (Test-Path $pythonExe)) {
@@ -108,6 +134,17 @@ if (-not (Test-Path $nextBuild)) {
 }
 if (-not (Test-Path $nextExe)) {
     throw "Frontend dependencies are missing. Run .\build.ps1 first."
+}
+$withVoiceRuntime = $enableAsrServer
+
+if ($withVoiceRuntime) {
+    Test-TtsDependencies
+}
+if ($enableAsrServer) {
+    Assert-VoicePythonVersion
+}
+if ($WithTts -and -not $enableAsrServer) {
+    Write-Warning "The Web voice reply runtime is only enabled with -WithAsr. Use .\start.ps1 -WithAsr."
 }
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -123,9 +160,17 @@ if ($processPath) {
 
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
+if ($withVoiceRuntime) {
+    $env:AGENT_TTS_ENABLED = "true"
+    $env:AGENT_TTS_PROVIDER = "system_speech"
+}
+else {
+    $env:AGENT_TTS_ENABLED = $null
+    $env:AGENT_TTS_PROVIDER = $null
+}
 
 $asrProcess = $null
-if ($WithAsrServer) {
+if ($enableAsrServer) {
     Test-AsrServerDependencies
 
     Write-Host "Starting ASR server..."
@@ -143,6 +188,7 @@ if ($WithAsrServer) {
         frontendPid = $null
         asrPid = $asrProcess.Id
         asrUrl = "http://127.0.0.1:$AsrPort"
+        ttsEnabled = [bool]$withVoiceRuntime
         startedAt = (Get-Date).ToString("o")
         url = $null
     } | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
@@ -189,7 +235,7 @@ Write-Host "Backend is ready."
 $env:LANGGRAPH_API_URL = "http://127.0.0.1:2024"
 $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:3000/api"
 $env:NEXT_PUBLIC_ASSISTANT_ID = "agent"
-if ($WithAsrServer) {
+if ($enableAsrServer) {
     $env:QINGZHOU_ASR_URL = "http://127.0.0.1:$AsrPort"
 }
 
@@ -207,7 +253,8 @@ $processInfo = [ordered]@{
     backendPid = $backendProcess.Id
     frontendPid = $frontendProcess.Id
     asrPid = if ($asrProcess) { $asrProcess.Id } else { $null }
-    asrUrl = if ($WithAsrServer) { "http://127.0.0.1:$AsrPort" } else { $null }
+    asrUrl = if ($enableAsrServer) { "http://127.0.0.1:$AsrPort" } else { $null }
+    ttsEnabled = [bool]$withVoiceRuntime
     startedAt = (Get-Date).ToString("o")
     url = "http://127.0.0.1:3000"
 }
@@ -228,8 +275,11 @@ Write-Host "Frontend is ready."
 
 Write-Host ""
 Write-Host "qingzhou-agent is running at http://127.0.0.1:3000" -ForegroundColor Green
-if ($WithAsrServer) {
+if ($enableAsrServer) {
     Write-Host "ASR server: http://127.0.0.1:$AsrPort"
+}
+if ($withVoiceRuntime) {
+    Write-Host "TTS enabled: System.Speech"
 }
 Write-Host "Logs: $logDir"
 Write-Host "Stop: .\stop.ps1"

@@ -1,0 +1,2 @@
+pyttsx3==2.90
+pywin32>=306; platform_system == "Windows"
