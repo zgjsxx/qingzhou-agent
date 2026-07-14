@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 export const runtime = "nodejs";
@@ -46,6 +46,54 @@ function formatContentDisposition(filename: string): string {
   return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
 
+/**
+ * Search for a file under .agent_outputs/files/ and .agent_outputs/shell/
+ * when the direct path doesn't exist. Returns the most recently modified match.
+ */
+async function findInAgentOutputs(
+  relativePath: string,
+): Promise<{ filePath: string; mtimeMs: number; isFile: () => boolean; size: number } | null> {
+  const agentDirs = [
+    path.join(repoRoot, ".agent_outputs", "files"),
+    path.join(repoRoot, ".agent_outputs", "shell"),
+  ];
+
+  const matches: { filePath: string; mtimeMs: number; isFile: () => boolean; size: number }[] = [];
+
+  for (const agentDir of agentDirs) {
+    let threadDirs: string[];
+    try {
+      threadDirs = await readdir(agentDir);
+    } catch {
+      // Directory doesn't exist or isn't readable — skip
+      continue;
+    }
+
+    for (const threadId of threadDirs) {
+      const candidate = path.join(agentDir, threadId, relativePath);
+      try {
+        const s = await stat(candidate);
+        if (s.isFile()) {
+          // Verify the file is still within the agent output directory (path traversal guard)
+          const rel = path.relative(repoRoot, candidate);
+          if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+            matches.push({ filePath: candidate, mtimeMs: s.mtimeMs, isFile: () => s.isFile(), size: s.size });
+          }
+        }
+      } catch {
+        // File doesn't exist in this thread dir — skip
+        continue;
+      }
+    }
+  }
+
+  if (matches.length === 0) return null;
+
+  // Return the most recently modified file
+  matches.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return matches[0];
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
@@ -64,10 +112,17 @@ export async function GET(
 
   // Check file exists and get size
   let fileStat;
+  let resolvedPath = filePath;
   try {
     fileStat = await stat(filePath);
   } catch {
-    return NextResponse.json({ error: "file not found" }, { status: 404 });
+    // Direct path not found — try fallback search in .agent_outputs
+    const fallback = await findInAgentOutputs(relativePath);
+    if (!fallback) {
+      return NextResponse.json({ error: "file not found" }, { status: 404 });
+    }
+    resolvedPath = fallback.filePath;
+    fileStat = { isFile: fallback.isFile, size: fallback.size, mtimeMs: fallback.mtimeMs };
   }
 
   if (!fileStat.isFile()) {
@@ -82,8 +137,8 @@ export async function GET(
   }
 
   // Read and return the file
-  const buffer = await readFile(filePath);
-  const filename = path.basename(filePath);
+  const buffer = await readFile(resolvedPath);
+  const filename = path.basename(resolvedPath);
   const mimeType = getMimeType(filename);
 
   return new NextResponse(buffer, {
