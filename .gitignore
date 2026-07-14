@@ -8,6 +8,7 @@ __pycache__/
 config/xu-agent.json
 logs/
 .tasks/
+.kanban/
 .agent_outputs/
 .agent_uploads/
 .agent_cron/

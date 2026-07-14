@@ -4,7 +4,7 @@ param(
     [switch]$WithAsrServer,
     [int]$AsrPort = 8765,
     [int]$AsrTimeoutSeconds = 300,
-    [int]$BackendTimeoutSeconds = 90,
+    [int]$BackendTimeoutSeconds = 180,
     [int]$FrontendTimeoutSeconds = 30
 )
 
@@ -177,7 +177,8 @@ try {
     Wait-HttpReady `
         -Url "http://127.0.0.1:2024/info" `
         -TimeoutSeconds $BackendTimeoutSeconds `
-        -ServiceName "Backend"
+        -ServiceName "Backend" `
+        -Process $backendProcess
 }
 catch {
     & (Join-Path $root "stop.ps1")

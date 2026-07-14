@@ -36,11 +36,11 @@ import { useFileUpload } from "@/hooks/use-file-upload";
 import { uploadedFileBlockToText } from "@/lib/multimodal-utils";
 import { ContentBlocksPreview } from "./ContentBlocksPreview";
 import {
-  useArtifactOpen,
   ArtifactContent,
   ArtifactTitle,
-  useArtifactContext,
 } from "./artifact";
+import { useArtifactContext, useArtifactOpen } from "./artifact-hooks";
+import { getContentString } from "./utils";
 
 function StickyToBottomContent(props: {
   content: ReactNode;
@@ -119,6 +119,13 @@ function HighlightedComposerText({ text }: { text: string }) {
     parts.push(text.slice(lastIndex));
   }
   return <>{parts}</>;
+}
+
+function isToolOnlyAssistantMessage(message: Message): boolean {
+  if (message.type !== "ai") return false;
+  const toolCalls = (message as { tool_calls?: unknown[] }).tool_calls;
+  if (!toolCalls?.length) return false;
+  return getContentString(message.content).trim().length === 0;
 }
 
 export function Thread() {
@@ -365,6 +372,13 @@ export function Thread() {
   const hasNoAIOrToolMessages = !messages.find(
     (m) => m.type === "ai" || m.type === "tool",
   );
+  const visibleMessages = messages.filter((message) => {
+    if (message.id?.startsWith(DO_NOT_RENDER_ID_PREFIX)) return false;
+    if (!hideToolCalls) return true;
+    if (message.type === "tool") return false;
+    return !isToolOnlyAssistantMessage(message);
+  });
+  const lastVisibleMessageId = visibleMessages.at(-1)?.id;
   const threadInterrupt = stream.interrupt;
   const handleSetBranch = useCallback(
     (branch: string) => stream.setBranch(branch),
@@ -509,8 +523,7 @@ export function Thread() {
               contentClassName="pt-8 pb-16 max-w-3xl mx-auto flex flex-col gap-4 w-full"
               content={
                 <>
-                  {messages
-                    .filter((m) => !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX))
+                  {visibleMessages
                     .map((message, index) =>
                       message.type === "human" ? (
                         <HumanMessage
@@ -525,7 +538,7 @@ export function Thread() {
                           isLoading={isLoading}
                           handleRegenerate={handleRegenerate}
                           isLastMessage={
-                            messages[messages.length - 1].id === message.id
+                            lastVisibleMessageId === message.id
                           }
                           hasNoAIOrToolMessages={hasNoAIOrToolMessages}
                           threadInterrupt={threadInterrupt}

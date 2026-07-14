@@ -162,6 +162,13 @@ PROMPT_SECTIONS = {
         "working on it, and complete it only after the work is actually done. Keep todo_write for short "
         "in-session checklists; persistent tasks are for recoverable project-level work."
     ),
+    "kanban": (
+        "Kanban Lite is the durable multi-agent work queue. Use kanban_create/list/show/comment "
+        "to model larger work as task cards with parent dependencies and handoff comments. "
+        "Use kanban_dispatch for an explicit dispatcher tick: it promotes unblocked cards, claims ready "
+        "cards, runs isolated delegate_task workers, and stores run summaries for downstream cards. "
+        "Use the older create_task/list_tasks tools only for simple legacy persistent checklists."
+    ),
     "background_tasks": (
         "For slow shell commands such as installs, builds, tests, deploys, or long scans, prefer "
         "run_shell_command(..., run_in_background=True). It returns a background task id immediately. "
@@ -245,6 +252,8 @@ def assemble_system_prompt(context: dict[str, Any]) -> str:
         sections.append(PROMPT_SECTIONS["rag"])
     if {"create_task", "list_tasks", "get_task", "claim_task", "complete_task"} <= tool_names:
         sections.append(PROMPT_SECTIONS["persistent_tasks"])
+    if {"kanban_create", "kanban_list", "kanban_show", "kanban_dispatch"} <= tool_names:
+        sections.append(PROMPT_SECTIONS["kanban"])
     if {"list_background_tasks", "get_background_task", "cancel_background_task", "run_shell_command"} <= tool_names:
         sections.append(PROMPT_SECTIONS["background_tasks"])
     if any(name.startswith("mcp__") for name in tool_names):

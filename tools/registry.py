@@ -1016,6 +1016,208 @@ def complete_task(task_id: str) -> str:
 
 
 @tool
+def kanban_create(
+    title: str,
+    body: str = "",
+    assignee: str = "agent",
+    parents: list[str] | None = None,
+    priority: int = 0,
+) -> str:
+    """Create a Kanban Lite task card with optional parent dependencies.
+
+    Args:
+        title: Short task title.
+        body: Detailed task instructions or acceptance criteria.
+        assignee: Worker/profile label. First version uses this for routing metadata.
+        parents: Optional parent task IDs that must be done before this card is ready.
+        priority: Higher numbers dispatch first.
+    """
+    from agent import kanban
+
+    try:
+        with kanban.connect_closing() as conn:
+            task_item = kanban.create_task(
+                conn,
+                title=title,
+                body=body,
+                assignee=assignee,
+                parents=parents,
+                priority=priority,
+            )
+            return "Created kanban task.\n" + kanban.task_summary_line(task_item)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        return f"Error: {exc}"
+
+
+@tool
+def kanban_list(status: str = "", assignee: str = "", include_archived: bool = False) -> str:
+    """List Kanban Lite task cards.
+
+    Args:
+        status: Optional status filter: todo, ready, running, blocked, done, archived.
+        assignee: Optional assignee/profile filter.
+        include_archived: Whether to include archived tasks when status is empty.
+    """
+    from agent import kanban
+
+    clean_status = str(status or "").strip()
+    if clean_status and clean_status not in kanban.VALID_STATUSES:
+        return f"Error: status must be one of: {', '.join(sorted(kanban.VALID_STATUSES))}"
+    with kanban.connect_closing() as conn:
+        tasks = kanban.list_tasks(
+            conn,
+            status=clean_status or None,
+            assignee=str(assignee or "").strip() or None,
+            include_archived=include_archived,
+        )
+    if not tasks:
+        return "No kanban tasks."
+    return "\n".join(kanban.task_summary_line(item) for item in tasks)
+
+
+@tool
+def kanban_show(task_id: str) -> str:
+    """Show one Kanban Lite task with parents, runs, and recent comments.
+
+    Args:
+        task_id: Kanban task ID returned by kanban_create or kanban_list.
+    """
+    from agent import kanban
+
+    try:
+        with kanban.connect_closing() as conn:
+            task_item = kanban.get_task(conn, task_id)
+            if task_item is None:
+                return f"Error: Task not found: {task_id}"
+            return kanban.task_detail_json(conn, task_item)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        return f"Error: {exc}"
+
+
+@tool
+def kanban_comment(task_id: str, body: str, author: str = "agent") -> str:
+    """Append a comment/blackboard note to a Kanban Lite task.
+
+    Args:
+        task_id: Kanban task ID.
+        body: Comment text.
+        author: Comment author label.
+    """
+    from agent import kanban
+
+    try:
+        with kanban.connect_closing() as conn:
+            comment_id = kanban.add_comment(conn, task_id, body=body, author=author)
+            return f"Added kanban comment #{comment_id} to {task_id}."
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        return f"Error: {exc}"
+
+
+@tool
+def kanban_claim(task_id: str, owner: str = "agent") -> str:
+    """Atomically claim a ready Kanban Lite task and mark it running.
+
+    Args:
+        task_id: Kanban task ID.
+        owner: Worker/profile label claiming the task.
+    """
+    from agent import kanban
+
+    with kanban.connect_closing() as conn:
+        task_item = kanban.claim_task(conn, task_id, owner=owner)
+        if task_item is None:
+            return f"Error: task {task_id} is not ready, is already claimed, or has unfinished parents."
+        return "Claimed kanban task.\n" + kanban.task_summary_line(task_item)
+
+
+@tool
+def kanban_complete(task_id: str, summary: str, result: str = "") -> str:
+    """Complete a Kanban Lite task and store its handoff summary.
+
+    Args:
+        task_id: Kanban task ID.
+        summary: Short handoff summary for downstream tasks.
+        result: Optional full result text. Defaults to summary.
+    """
+    from agent import kanban
+
+    with kanban.connect_closing() as conn:
+        ok = kanban.complete_task(conn, task_id, summary=summary, result=result or summary)
+        if not ok:
+            return f"Error: task {task_id} is not in a completable state."
+        task_item = kanban.get_task(conn, task_id)
+        promoted = kanban.recompute_ready(conn)
+    output = [f"Completed kanban task {task_id}."]
+    if task_item:
+        output.append(kanban.task_summary_line(task_item))
+    if promoted:
+        output.append("Promoted downstream tasks: " + ", ".join(promoted))
+    return "\n".join(output)
+
+
+@tool
+def kanban_block(task_id: str, reason: str) -> str:
+    """Block a Kanban Lite task with a human-readable reason.
+
+    Args:
+        task_id: Kanban task ID.
+        reason: Why the task cannot proceed.
+    """
+    from agent import kanban
+
+    with kanban.connect_closing() as conn:
+        ok = kanban.block_task(conn, task_id, reason=reason)
+        if not ok:
+            return f"Error: task {task_id} is not in a blockable state."
+    return f"Blocked kanban task {task_id}: {reason}"
+
+
+@tool
+def kanban_retry(task_id: str) -> str:
+    """Move a blocked Kanban Lite task back to ready/todo so it can be dispatched again.
+
+    Args:
+        task_id: Kanban task ID.
+    """
+    from agent import kanban
+
+    with kanban.connect_closing() as conn:
+        task_item = kanban.retry_task(conn, task_id)
+        if task_item is None:
+            return f"Error: task {task_id} is not blocked or cannot be retried."
+        return "Retried kanban task.\n" + kanban.task_summary_line(task_item)
+
+
+@tool
+def kanban_dispatch(max_tasks: int = 1, cwd: str = "", mode: str = "readonly", max_steps: int | None = None) -> str:
+    """Run one Kanban Lite dispatcher tick using Qingzhou delegate_task workers.
+
+    This promotes unblocked todo cards to ready, claims up to max_tasks ready cards,
+    runs each card through an isolated subagent, and stores the handoff summary.
+
+    Args:
+        max_tasks: Maximum ready cards to dispatch in this tick.
+        cwd: Optional working directory hint for worker subagents.
+        mode: readonly or workspace_write.
+        max_steps: Optional maximum subagent reasoning/tool steps per card.
+    """
+    from agent import kanban
+
+    try:
+        with kanban.connect_closing() as conn:
+            result = kanban.dispatch_once(
+                conn,
+                max_tasks=max_tasks,
+                cwd=cwd,
+                mode=mode,
+                max_steps=max_steps,
+            )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001 - surface dispatcher failure to the model.
+        return f"Error: {exc}"
+
+
+@tool
 def schedule_cron(cron: str, prompt: str, recurring: bool = True, durable: bool = True) -> str:
     """Schedule a prompt to run automatically in the current thread.
 
@@ -1999,6 +2201,15 @@ ALL_TOOLS = [
     get_task,
     claim_task,
     complete_task,
+    kanban_create,
+    kanban_list,
+    kanban_show,
+    kanban_comment,
+    kanban_claim,
+    kanban_complete,
+    kanban_block,
+    kanban_retry,
+    kanban_dispatch,
     schedule_cron,
     list_crons,
     cancel_cron,

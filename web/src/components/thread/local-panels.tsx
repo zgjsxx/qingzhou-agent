@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   ChevronRight,
+  Columns3,
   Plus,
   Plug,
   Save,
@@ -316,6 +317,17 @@ export function LocalPanels() {
               （例如“插件”变成“鎻掍欢”），实体写法能让源码保持 ASCII，
               浏览器渲染时仍显示正确中文，避免再次被错误编码污染。 */}
           &#25554;&#20214;
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start gap-2 px-3"
+          asChild
+        >
+          <Link href="/kanban">
+            <Columns3 className="size-4" />
+            &#30475;&#26495;
+          </Link>
         </Button>
         <Button
           variant="ghost"
