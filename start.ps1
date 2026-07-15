@@ -3,7 +3,6 @@ param(
     [switch]$NoBrowser,
     [switch]$WithAsr,
     [switch]$WithAsrServer,
-    [switch]$WithTts,
     [int]$AsrPort = 8765,
     [int]$AsrTimeoutSeconds = 300,
     [int]$BackendTimeoutSeconds = 180,
@@ -143,10 +142,6 @@ if ($withVoiceRuntime) {
 if ($enableAsrServer) {
     Assert-VoicePythonVersion
 }
-if ($WithTts -and -not $enableAsrServer) {
-    Write-Warning "The Web voice reply runtime is only enabled with -WithAsr. Use .\start.ps1 -WithAsr."
-}
-
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 # Some launchers inject both "Path" and "PATH". Windows PowerShell 5
@@ -162,7 +157,7 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 if ($withVoiceRuntime) {
     $env:AGENT_TTS_ENABLED = "true"
-    $env:AGENT_TTS_PROVIDER = "system_speech"
+    $env:AGENT_TTS_PROVIDER = "edge_tts"
 }
 else {
     $env:AGENT_TTS_ENABLED = $null
@@ -290,7 +285,8 @@ if ($enableAsrServer) {
     Write-Host "ASR server: http://127.0.0.1:$AsrPort"
 }
 if ($withVoiceRuntime) {
-    Write-Host "TTS enabled: System.Speech"
+    $ttsProvider = if ($env:AGENT_TTS_PROVIDER) { $env:AGENT_TTS_PROVIDER } else { "edge_tts" }
+    Write-Host "TTS enabled: $ttsProvider"
 }
 Write-Host "Logs: $logDir"
 Write-Host "Stop: .\stop.ps1"

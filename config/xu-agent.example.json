@@ -19,6 +19,13 @@
   "weixin": {
     "enabled": false
   },
+  "lark": {
+    "enabled": false,
+    "appId": "",
+    "appSecret": "",
+    "voiceReplyEnabled": false,
+    "voiceReplyNote": "Runtime uses environment variables: LARK_WS_ENABLED, LARK_APP_ID, LARK_APP_SECRET, LARK_VOICE_REPLY_ENABLED. Voice messages reuse .\\start.ps1 -WithAsr for TTS. TTS defaults to edge-tts and falls back to system_speech. Optional voice/style env: AGENT_TTS_VOICE, AGENT_TTS_STYLE, AGENT_TTS_RATE, AGENT_TTS_VOLUME, AGENT_TTS_PITCH. ffmpeg is still used as a fallback converter when direct Opus upload is not accepted."
+  },
   "telegram": {
     "enabled": false,
     "botToken": "",

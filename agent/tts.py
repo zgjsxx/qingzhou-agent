@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import inspect
 import json
 import os
 import platform
@@ -16,8 +18,11 @@ from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 TTS_OUTPUT_DIR = ROOT_DIR / ".agent_outputs" / "tts"
-DEFAULT_PROVIDER = "system_speech" if platform.system() == "Windows" else "pyttsx3"
+DEFAULT_PROVIDER = "edge_tts"
+FALLBACK_PROVIDER = "system_speech" if platform.system() == "Windows" else "pyttsx3"
 DEFAULT_FORMAT = "wav"
+EDGE_TTS_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+EDGE_TTS_DEFAULT_OPUS_FORMAT = "webm-24khz-16bit-24kbps-mono-opus"
 DEFAULT_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
@@ -73,7 +78,7 @@ def _load_pyttsx3_engine():
         import pyttsx3
     except ImportError as exc:
         raise TtsDependencyError(
-            "pyttsx3 is required for local TTS. Run: .\\build.ps1 -WithTts"
+            "pyttsx3 is required for local TTS fallback. Run: .\\build.ps1 -WithAsr"
         ) from exc
     return pyttsx3.init()
 
@@ -142,6 +147,102 @@ def _synthesize_with_pyttsx3(text: str, output_path: Path, voice: str = "") -> d
     engine.runAndWait()
     if not output_path.exists() or output_path.stat().st_size <= 0:
         raise RuntimeError(f"TTS synthesis did not create audio file: {output_path}")
+    return config
+
+
+def _edge_tts_voice(voice: str = "") -> str:
+    return (voice or os.getenv("AGENT_TTS_VOICE", "") or EDGE_TTS_DEFAULT_VOICE).strip()
+
+
+def _edge_tts_rate() -> str:
+    return os.getenv("AGENT_TTS_RATE", "+0%").strip() or "+0%"
+
+
+def _edge_tts_volume() -> str:
+    return os.getenv("AGENT_TTS_VOLUME", "+0%").strip() or "+0%"
+
+
+def _edge_tts_pitch() -> str:
+    return os.getenv("AGENT_TTS_PITCH", "+0Hz").strip() or "+0Hz"
+
+
+def _edge_tts_output_format(audio_format: str) -> str:
+    if audio_format in {"opus", "webm", "webm_opus"}:
+        return os.getenv("AGENT_EDGE_TTS_OPUS_FORMAT", EDGE_TTS_DEFAULT_OPUS_FORMAT).strip() or EDGE_TTS_DEFAULT_OPUS_FORMAT
+    return os.getenv("AGENT_EDGE_TTS_OUTPUT_FORMAT", "").strip()
+
+
+async def _edge_tts_save_async(text: str, output_path: Path, voice: str, audio_format: str) -> dict[str, Any]:
+    try:
+        import edge_tts
+    except ImportError as exc:
+        raise TtsDependencyError("edge-tts is required for Edge TTS. Run: .\\build.ps1 -WithAsr") from exc
+
+    selected_voice = _edge_tts_voice(voice)
+    kwargs: dict[str, Any] = {
+        "text": text,
+        "voice": selected_voice,
+        "rate": _edge_tts_rate(),
+        "volume": _edge_tts_volume(),
+        "pitch": _edge_tts_pitch(),
+    }
+    style = os.getenv("AGENT_TTS_STYLE", "").strip()
+    if style:
+        kwargs["style"] = style
+    output_format = _edge_tts_output_format(audio_format)
+    if output_format:
+        kwargs["output_format"] = output_format
+
+    communicate_cls = edge_tts.Communicate
+    signature = inspect.signature(communicate_cls)
+    accepts_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+    supported_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key in signature.parameters or accepts_var_kwargs
+    }
+    if output_format and "output_format" not in supported_kwargs:
+        raise TtsDependencyError("installed edge-tts does not support output_format for Opus output")
+    communicate = communicate_cls(**supported_kwargs)
+    await communicate.save(str(output_path))
+    return {
+        "voice": selected_voice,
+        "rate": kwargs["rate"],
+        "volume": kwargs["volume"],
+        "pitch": kwargs["pitch"],
+        "style": style,
+        "edge_output_format": output_format,
+        "codec": "opus" if audio_format in {"opus", "webm", "webm_opus"} else "",
+    }
+
+
+def _synthesize_with_edge_tts(text: str, output_path: Path, voice: str = "", audio_format: str = DEFAULT_FORMAT) -> dict[str, Any]:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        config = asyncio.run(_edge_tts_save_async(text, output_path, voice, audio_format))
+    else:
+        result: dict[str, Any] = {}
+        error: BaseException | None = None
+
+        def runner() -> None:
+            nonlocal result, error
+            try:
+                result = asyncio.run(_edge_tts_save_async(text, output_path, voice, audio_format))
+            except BaseException as exc:  # noqa: BLE001 - move async worker error to caller.
+                error = exc
+
+        import threading
+
+        thread = threading.Thread(target=runner, name="edge-tts-save")
+        thread.start()
+        thread.join()
+        if error is not None:
+            raise error
+        config = result
+
+    if not output_path.exists() or output_path.stat().st_size <= 0:
+        raise RuntimeError(f"Edge TTS did not create audio file: {output_path}")
     return config
 
 
@@ -263,7 +364,7 @@ def _warm_system_speech() -> dict[str, Any]:
 
 
 def _safe_output_path(output_path: str | Path | None, audio_format: str) -> Path:
-    suffix = f".{audio_format}"
+    suffix = ".webm" if audio_format == "webm_opus" else f".{audio_format}"
     if output_path:
         path = Path(output_path).expanduser().resolve()
         if path.suffix.lower() != suffix:
@@ -291,24 +392,51 @@ def synthesize_speech(
         raise ValueError("TTS text must not be empty")
 
     selected_provider = (provider or os.getenv("AGENT_TTS_PROVIDER", DEFAULT_PROVIDER)).strip().lower()
-    selected_format = (audio_format or os.getenv("AGENT_TTS_FORMAT", DEFAULT_FORMAT)).strip().lower()
-    selected_format = re.sub(r"[^a-z0-9]+", "", selected_format) or DEFAULT_FORMAT
-    if selected_format != "wav":
-        raise ValueError("local TTS currently supports wav output only")
+    configured_format = (audio_format or os.getenv("AGENT_TTS_FORMAT", "")).strip().lower()
+    if not configured_format and selected_provider == "edge_tts":
+        configured_format = "mp3"
+    selected_format = (configured_format or DEFAULT_FORMAT).strip().lower()
+    selected_format = re.sub(r"[^a-z0-9_]+", "", selected_format) or DEFAULT_FORMAT
+    if selected_format == "webmopus":
+        selected_format = "webm_opus"
+    if selected_format not in {"wav", "mp3", "opus", "webm", "webm_opus"}:
+        raise ValueError(f"unsupported TTS audio format: {selected_format}")
 
     path = _safe_output_path(output_path, selected_format)
-    if selected_provider == "system_speech":
-        config = _synthesize_with_system_speech(content, path, voice=voice)
-    elif selected_provider == "pyttsx3":
-        config = _synthesize_with_pyttsx3(content, path, voice=voice)
-    else:
-        raise ValueError(f"unsupported TTS provider: {selected_provider}")
+    fallback_from = ""
+    try:
+        if selected_provider == "edge_tts":
+            config = _synthesize_with_edge_tts(content, path, voice=voice, audio_format=selected_format)
+        elif selected_provider == "system_speech":
+            if selected_format != "wav":
+                raise ValueError("System.Speech TTS only supports wav output")
+            config = _synthesize_with_system_speech(content, path, voice=voice)
+        elif selected_provider == "pyttsx3":
+            if selected_format != "wav":
+                raise ValueError("pyttsx3 TTS only supports wav output")
+            config = _synthesize_with_pyttsx3(content, path, voice=voice)
+        else:
+            raise ValueError(f"unsupported TTS provider: {selected_provider}")
+    except Exception:
+        if selected_provider != "edge_tts":
+            raise
+        fallback_from = selected_provider
+        selected_provider = FALLBACK_PROVIDER
+        selected_format = "wav"
+        path = _safe_output_path(output_path, selected_format)
+        if selected_provider == "system_speech":
+            config = _synthesize_with_system_speech(content, path, voice=voice)
+        elif selected_provider == "pyttsx3":
+            config = _synthesize_with_pyttsx3(content, path, voice=voice)
+        else:
+            raise ValueError(f"unsupported fallback TTS provider: {selected_provider}")
 
     return {
         "path": str(path),
         "filename": path.name,
         "format": selected_format,
         "provider": selected_provider,
+        "fallback_from": fallback_from,
         "size": path.stat().st_size,
         **config,
     }
@@ -316,11 +444,23 @@ def synthesize_speech(
 
 def warm_tts_engine() -> dict[str, Any]:
     provider = os.getenv("AGENT_TTS_PROVIDER", DEFAULT_PROVIDER).strip().lower() or DEFAULT_PROVIDER
+    if provider == "edge_tts":
+        try:
+            import edge_tts  # noqa: F401
+
+            return {
+                "provider": provider,
+                "voice": _edge_tts_voice(),
+                "style": os.getenv("AGENT_TTS_STYLE", "").strip(),
+            }
+        except Exception:
+            provider = FALLBACK_PROVIDER
     if provider == "system_speech":
         config = _warm_system_speech()
         voices = config.get("available_voices") if isinstance(config.get("available_voices"), list) else []
         return {
             "provider": provider,
+            "fallback_from": "edge_tts" if os.getenv("AGENT_TTS_PROVIDER", DEFAULT_PROVIDER).strip().lower() in {"", "edge_tts"} else "",
             "voice_count": len(voices),
             **config,
         }

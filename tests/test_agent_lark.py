@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -197,6 +198,242 @@ class AgentLarkTest(unittest.TestCase):
         payload = post_json.call_args.args[2]
         self.assertEqual(payload["msg_type"], "text")
 
+    def test_send_lark_text_strips_web_audio_markers(self):
+        with (
+            patch.dict("os.environ", {"LARK_MARKDOWN_ENABLED": "false"}),
+            patch("agent_lark._get_tenant_access_token", return_value="token"),
+            patch("agent_lark._post_lark_json", return_value={"code": 0}) as post_json,
+        ):
+            agent_lark.send_lark_text(
+                "oc_1",
+                'hello [[qingzhou-audio:{"url":"/api/local/downloads/a.wav"}]]',
+                app_id="app",
+                app_secret="secret",
+            )
+
+        payload = post_json.call_args.args[2]
+        self.assertEqual(json.loads(payload["content"]), {"text": "hello"})
+
+    def test_extract_qingzhou_audio_marker_paths_resolves_local_download_url(self):
+        marker = (
+            '[[qingzhou-audio:{"url":"/api/local/downloads/.agent_outputs/tts/voice.mp3"}]]'
+        )
+
+        paths = agent_lark._extract_qingzhou_audio_marker_paths(marker)
+
+        self.assertEqual(
+            paths,
+            [(agent_lark.ROOT_DIR / ".agent_outputs" / "tts" / "voice.mp3").resolve()],
+        )
+
+    def test_extract_qingzhou_audio_marker_paths_rejects_path_escape(self):
+        marker = '[[qingzhou-audio:{"url":"/api/local/downloads/../secret.wav"}]]'
+
+        self.assertEqual(agent_lark._extract_qingzhou_audio_marker_paths(marker), [])
+
+    def test_extract_local_download_paths_finds_only_images(self):
+        text = (
+            "![chart](http://localhost:3000/api/local/downloads/.agent_outputs/charts/a.png) "
+            "[csv](http://localhost:3000/api/local/downloads/output/a.csv)"
+        )
+
+        paths = agent_lark._extract_local_download_paths(text, agent_lark.IMAGE_SUFFIXES)
+
+        self.assertEqual(
+            paths,
+            [(agent_lark.ROOT_DIR / ".agent_outputs" / "charts" / "a.png").resolve()],
+        )
+
+    def test_upload_lark_file_returns_file_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = Path(tmpdir) / "voice.opus"
+            audio_path.write_bytes(b"opus")
+
+            with (
+                patch("agent_lark._get_tenant_access_token", return_value="token"),
+                patch(
+                    "agent_lark._request_lark_multipart",
+                    return_value={"code": 0, "data": {"file_key": "file_voice"}},
+                ) as request_multipart,
+            ):
+                file_key = agent_lark._upload_lark_file(
+                    audio_path,
+                    file_type="opus",
+                    app_id="app",
+                    app_secret="secret",
+                )
+
+        self.assertEqual(file_key, "file_voice")
+        request_multipart.assert_called_once()
+        self.assertEqual(request_multipart.call_args.kwargs["fields"]["file_type"], "opus")
+        self.assertIn("file", request_multipart.call_args.kwargs["files"])
+
+    def test_upload_lark_image_returns_image_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = Path(tmpdir) / "chart.png"
+            image_path.write_bytes(b"png")
+
+            with (
+                patch("agent_lark._get_tenant_access_token", return_value="token"),
+                patch(
+                    "agent_lark._request_lark_multipart",
+                    return_value={"code": 0, "data": {"image_key": "img_key"}},
+                ) as request_multipart,
+            ):
+                image_key = agent_lark._upload_lark_image(
+                    image_path,
+                    app_id="app",
+                    app_secret="secret",
+                )
+
+        self.assertEqual(image_key, "img_key")
+        request_multipart.assert_called_once()
+        self.assertEqual(request_multipart.call_args.kwargs["fields"]["image_type"], "message")
+        self.assertIn("image", request_multipart.call_args.kwargs["files"])
+
+    def test_send_lark_image_uploads_and_sends_image_message(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = Path(tmpdir) / "chart.png"
+            image_path.write_bytes(b"png")
+
+            with (
+                patch("agent_lark._upload_lark_image", return_value="img_key") as upload,
+                patch("agent_lark._get_tenant_access_token", return_value="token"),
+                patch("agent_lark._send_lark_message", return_value={"code": 0}) as send_message,
+            ):
+                agent_lark.send_lark_image(
+                    "oc_1",
+                    image_path,
+                    app_id="app",
+                    app_secret="secret",
+                )
+
+        upload.assert_called_once_with(image_path, app_id="app", app_secret="secret", token="token")
+        send_message.assert_called_once_with(
+            "oc_1",
+            "token",
+            msg_type="image",
+            content={"image_key": "img_key"},
+        )
+
+    def test_send_lark_audio_uploads_and_sends_audio_message(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = Path(tmpdir) / "voice.opus"
+            audio_path.write_bytes(b"opus")
+
+            with (
+                patch("agent_lark._convert_audio_to_opus", return_value=audio_path) as convert,
+                patch("agent_lark._upload_lark_file", return_value="file_voice") as upload,
+                patch("agent_lark._get_tenant_access_token", return_value="token"),
+                patch("agent_lark._send_lark_message", return_value={"code": 0}) as send_message,
+            ):
+                agent_lark.send_lark_audio(
+                    "oc_1",
+                    audio_path,
+                    app_id="app",
+                    app_secret="secret",
+                )
+
+        convert.assert_called_once_with(audio_path)
+        upload.assert_called_once_with(
+            audio_path,
+            file_type="opus",
+            app_id="app",
+            app_secret="secret",
+            token="token",
+        )
+        send_message.assert_called_once_with(
+            "oc_1",
+            "token",
+            msg_type="audio",
+            content={"file_key": "file_voice"},
+        )
+
+    def test_send_lark_audio_markers_sends_marker_audio(self):
+        audio_path = agent_lark.ROOT_DIR / ".agent_outputs" / "tts" / "marker-test.wav"
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(b"wav")
+        marker = (
+            f'hello [[qingzhou-audio:{{"url":"/api/local/downloads/.agent_outputs/tts/{audio_path.name}"}}]]'
+        )
+        try:
+            with patch("agent_lark.send_lark_audio") as send_audio:
+                sent = agent_lark.send_lark_audio_markers(
+                    "oc_1",
+                    marker,
+                    app_id="app",
+                    app_secret="secret",
+                )
+        finally:
+            audio_path.unlink(missing_ok=True)
+
+        self.assertTrue(sent)
+        send_audio.assert_called_once_with(
+            "oc_1",
+            audio_path.resolve(),
+            app_id="app",
+            app_secret="secret",
+        )
+
+    def test_send_lark_images_from_text_sends_local_images(self):
+        image_path = agent_lark.ROOT_DIR / ".agent_outputs" / "images" / "marker-test.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"png")
+        text = f"![chart](/api/local/downloads/.agent_outputs/images/{image_path.name})"
+        try:
+            with patch("agent_lark.send_lark_image") as send_image:
+                sent = agent_lark.send_lark_images_from_text(
+                    "oc_1",
+                    text,
+                    app_id="app",
+                    app_secret="secret",
+                )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertTrue(sent)
+        send_image.assert_called_once_with(
+            "oc_1",
+            image_path.resolve(),
+            app_id="app",
+            app_secret="secret",
+        )
+
+    def test_send_lark_voice_reply_synthesizes_and_sends_audio_when_enabled(self):
+        with (
+            patch.dict(
+                "os.environ",
+                {"LARK_VOICE_REPLY_ENABLED": "true", "AGENT_TTS_ENABLED": "true"},
+            ),
+            patch("agent_lark.synthesize_speech", return_value={"path": "voice.wav"}) as synthesize,
+            patch("agent_lark.send_lark_audio") as send_audio,
+        ):
+            sent = agent_lark.send_lark_voice_reply(
+                "oc_1",
+                "hello",
+                app_id="app",
+                app_secret="secret",
+            )
+
+        self.assertTrue(sent)
+        synthesize.assert_called_once_with("hello", voice="", audio_format="opus")
+        send_audio.assert_called_once_with("oc_1", "voice.wav", app_id="app", app_secret="secret")
+
+    def test_bridge_prefers_marker_audio_over_auto_voice_reply(self):
+        bridge = agent_lark.LarkWsBridge(graph=SimpleNamespace(), app_id="app", app_secret="secret")
+        text = 'hello [[qingzhou-audio:{"url":"/api/local/downloads/.agent_outputs/tts/voice.mp3"}]]'
+
+        with (
+            patch("agent_lark.send_lark_images_from_text") as send_images,
+            patch("agent_lark.send_lark_audio_markers", return_value=True) as send_markers,
+            patch("agent_lark.send_lark_voice_reply") as send_voice,
+        ):
+            bridge._send_voice_reply_if_enabled("oc_1", text)
+
+        send_images.assert_called_once_with("oc_1", text, app_id="app", app_secret="secret")
+        send_markers.assert_called_once_with("oc_1", text, app_id="app", app_secret="secret")
+        send_voice.assert_not_called()
+
     def test_bridge_handle_event_submits_to_buffer(self):
         """handle_event should add event to the merge buffer, not process directly."""
         graph = SimpleNamespace()
@@ -260,12 +497,14 @@ class AgentLarkTest(unittest.TestCase):
 
         with (
             patch("agent_lark.send_lark_text") as send_text,
+            patch("agent_lark.send_lark_voice_reply") as send_voice,
             patch("agent_lark._stream_channel_messages_enabled", return_value=False),
         ):
             bridge._process_merged_events(events, ["re_1"])
 
         send_text.assert_called()
         self.assertEqual(send_text.call_args.args[:2], ("oc_run", "收到"))
+        send_voice.assert_called_once_with("oc_run", "收到", app_id="app", app_secret="secret")
 
     def test_process_merged_events_file_event(self):
         """File events should download and produce text description."""

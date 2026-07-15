@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sys
 import unittest
 import uuid
 from pathlib import Path
@@ -40,7 +41,7 @@ class TtsTest(unittest.TestCase):
         with patch.dict("os.environ", {"AGENT_TTS_ENABLED": "false"}):
             self.assertFalse(tts.tts_enabled())
 
-    def test_synthesize_speech_writes_default_wav(self):
+    def test_synthesize_speech_falls_back_to_system_speech_by_default(self):
         with temporary_workspace_dir() as tmpdir:
             root = Path(tmpdir)
 
@@ -50,15 +51,56 @@ class TtsTest(unittest.TestCase):
 
             with (
                 patch("agent.tts.TTS_OUTPUT_DIR", root),
+                patch("agent.tts._synthesize_with_edge_tts", side_effect=tts.TtsDependencyError("missing edge")),
                 patch("agent.tts._synthesize_with_system_speech", side_effect=fake_synthesize) as synthesize,
             ):
                 result = tts.synthesize_speech("hello")
 
             synthesize.assert_called_once()
             self.assertEqual(result["format"], "wav")
-            self.assertEqual(result["provider"], tts.DEFAULT_PROVIDER)
+            self.assertEqual(result["provider"], tts.FALLBACK_PROVIDER)
+            self.assertEqual(result["fallback_from"], "edge_tts")
             self.assertTrue(Path(result["path"]).exists())
             self.assertGreater(result["size"], 0)
+
+    def test_synthesize_speech_edge_tts_opus(self):
+        class FakeCommunicate:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def save(self, path):
+                Path(path).write_bytes(b"opus")
+
+        fake_edge_tts = MagicMock(Communicate=FakeCommunicate)
+        with (
+            temporary_workspace_dir() as tmpdir,
+            patch("agent.tts.TTS_OUTPUT_DIR", Path(tmpdir)),
+            patch.dict(sys.modules, {"edge_tts": fake_edge_tts}),
+        ):
+            result = tts.synthesize_speech("hello", audio_format="opus")
+            self.assertEqual(result["provider"], "edge_tts")
+            self.assertEqual(result["format"], "opus")
+            self.assertEqual(result["voice"], tts.EDGE_TTS_DEFAULT_VOICE)
+            self.assertEqual(result["codec"], "opus")
+            self.assertTrue(Path(result["path"]).exists())
+
+    def test_synthesize_speech_edge_tts_defaults_to_mp3_extension(self):
+        class FakeCommunicate:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def save(self, path):
+                Path(path).write_bytes(b"mp3")
+
+        with (
+            temporary_workspace_dir() as tmpdir,
+            patch("agent.tts.TTS_OUTPUT_DIR", Path(tmpdir)),
+            patch.dict(sys.modules, {"edge_tts": MagicMock(Communicate=FakeCommunicate)}),
+        ):
+            result = tts.synthesize_speech("hello")
+            self.assertEqual(result["provider"], "edge_tts")
+            self.assertEqual(result["format"], "mp3")
+            self.assertEqual(Path(result["path"]).suffix, ".mp3")
 
     def test_synthesize_speech_rejects_empty_text(self):
         with self.assertRaisesRegex(ValueError, "must not be empty"):
@@ -107,10 +149,11 @@ class TtsTest(unittest.TestCase):
                 "volume": 100,
                 "available_voices": ["Microsoft Zira Desktop"],
             },
-        ):
+        ), patch.dict(os.environ, {"AGENT_TTS_PROVIDER": "system_speech"}, clear=False):
             result = tts.warm_tts_engine()
 
-        self.assertEqual(result["provider"], tts.DEFAULT_PROVIDER)
+        self.assertEqual(result["provider"], tts.FALLBACK_PROVIDER)
+        self.assertEqual(result["fallback_from"], "")
         self.assertEqual(result["voice_count"], 1)
 
     def test_run_system_speech_script_parses_json(self):

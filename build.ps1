@@ -125,19 +125,12 @@ if (-not $SkipBackend) {
         if (-not (Test-Path $ttsRequirements)) {
             throw "TTS requirements file not found: $ttsRequirements"
         }
-        Write-Host "[backend] Installing optional pyttsx3 TTS dependencies..."
+        Write-Host "[backend] Installing optional TTS dependencies..."
         Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "pip", "install", "-r", "requirements-tts.txt") -WorkingDirectory $root
 
         if ($WarmTtsEngine) {
-            Write-Host "[backend] Warming pyttsx3 TTS engine..."
-            $previousProvider = $env:AGENT_TTS_PROVIDER
-            try {
-                $env:AGENT_TTS_PROVIDER = "pyttsx3"
-                Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "agent.tts", "--warm") -WorkingDirectory $root
-            }
-            finally {
-                $env:AGENT_TTS_PROVIDER = $previousProvider
-            }
+            Write-Host "[backend] Warming TTS engine..."
+            Invoke-Checked -FilePath $pythonExe -ArgumentList @("-m", "agent.tts", "--warm") -WorkingDirectory $root
         }
     }
 }

@@ -6,6 +6,8 @@ import json
 import os
 import queue
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -13,20 +15,27 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from agent.commands import handle_thread_slash_command
 from agent.logging import log_event
+from agent.tts import FALLBACK_PROVIDER, synthesize_speech, tts_enabled
 
 LARK_API_BASE_URL = "https://open.feishu.cn/open-apis"
 DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 12000
 DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 400
 LARK_ACK_EMOJI = os.getenv("LARK_ACK_EMOJI_TYPE", "OK")
-LARK_UPLOAD_DIR = Path(__file__).resolve().parents[2] / ".agent_uploads" / "lark"
+ROOT_DIR = Path(__file__).resolve().parents[2]
+LARK_UPLOAD_DIR = ROOT_DIR / ".agent_uploads" / "lark"
+LARK_TTS_DIR = ROOT_DIR / ".agent_outputs" / "lark_tts"
 MERGE_WAIT_SECONDS = max(0.0, min(float(os.getenv("LARK_MERGE_WAIT_SECONDS", "10.0")), 10.0))
+QINGZHOU_AUDIO_MARKER_REGEX = re.compile(r"\[\[qingzhou-audio:(\{.*?\})\]\]", re.DOTALL)
+LOCAL_DOWNLOAD_URL_REGEX = re.compile(r'(?:https?://[^/\s<>)"\']+)?/api/local/downloads/[^\s<>)"\']+', re.IGNORECASE)
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 _start_lock = threading.Lock()
 _started = False
@@ -308,6 +317,67 @@ def _content_to_text(content: Any) -> str:
     return str(content or "")
 
 
+def _strip_qingzhou_audio_markers(text: str) -> str:
+    return QINGZHOU_AUDIO_MARKER_REGEX.sub("", str(text or "")).strip()
+
+
+def _local_download_url_to_path(url: str) -> Path | None:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    path = urllib.parse.unquote(parsed.path or "")
+    prefix = "/api/local/downloads/"
+    if not path.startswith(prefix):
+        return None
+    relative_path = path[len(prefix) :].lstrip("/\\")
+    candidate = (ROOT_DIR / relative_path).resolve()
+    try:
+        candidate.relative_to(ROOT_DIR)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _extract_local_download_paths(text: str, allowed_suffixes: set[str]) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for match in LOCAL_DOWNLOAD_URL_REGEX.finditer(str(text or "")):
+        candidate = _local_download_url_to_path(match.group(0).rstrip(".,;:"))
+        if candidate is None or candidate.suffix.lower() not in allowed_suffixes:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        paths.append(candidate)
+    return paths
+
+
+def _extract_qingzhou_audio_marker_paths(text: str) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for match in QINGZHOU_AUDIO_MARKER_REGEX.finditer(str(text or "")):
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        candidate: Path | None = None
+        raw_path = str(payload.get("path") or "").strip()
+        if raw_path:
+            candidate = Path(raw_path).expanduser().resolve()
+            try:
+                candidate.relative_to(ROOT_DIR)
+            except ValueError:
+                candidate = None
+        if candidate is None:
+            candidate = _local_download_url_to_path(str(payload.get("url") or ""))
+        if candidate is None or candidate in seen:
+            continue
+        seen.add(candidate)
+        paths.append(candidate)
+    return paths
+
+
 def _event_to_text_fragment(event: LarkMessageEvent, app_id: str, app_secret: str) -> str:
     """Convert a single LarkMessageEvent into a text fragment for the merged prompt."""
     if event.text:
@@ -478,6 +548,62 @@ def _post_lark_json(path: str, token: str, payload: dict[str, Any], query: dict[
     return _request_lark_json(path, token, payload, query=query)
 
 
+def _multipart_form_data(fields: dict[str, str], files: dict[str, tuple[str, bytes, str]]) -> tuple[bytes, str]:
+    boundary = f"qingzhou-{uuid.uuid4().hex}"
+    chunks: list[bytes] = []
+    for name, value in fields.items():
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"),
+                str(value).encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+    for name, (filename, data, content_type) in files.items():
+        safe_filename = filename.replace('"', "_")
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                (
+                    f'Content-Disposition: form-data; name="{name}"; '
+                    f'filename="{safe_filename}"\r\n'
+                ).encode("utf-8"),
+                f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
+                data,
+                b"\r\n",
+            ]
+        )
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(chunks), boundary
+
+
+def _request_lark_multipart(
+    path: str,
+    token: str,
+    *,
+    fields: dict[str, str],
+    files: dict[str, tuple[str, bytes, str]],
+    timeout: int = 30,
+) -> dict[str, Any]:
+    data, boundary = _multipart_form_data(fields, files)
+    request = urllib.request.Request(
+        f"{LARK_API_BASE_URL}{path}",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Lark API HTTP {exc.code}: {detail}") from exc
+
+
 def _download_lark_resource(
     message_id: str,
     resource_key: str,
@@ -639,9 +765,250 @@ def _send_lark_message(
     )
 
 
+def _ffmpeg_executable() -> str:
+    configured = os.getenv("LARK_FFMPEG", "").strip()
+    if configured:
+        return configured
+    return shutil.which("ffmpeg") or ""
+
+
+def _convert_audio_to_opus(input_path: Path) -> Path:
+    if input_path.suffix.lower() in {".opus", ".webm"} and _bool_env("LARK_DIRECT_OPUS_UPLOAD", True):
+        return input_path
+
+    ffmpeg = _ffmpeg_executable()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required to convert TTS WAV output to Feishu audio opus")
+
+    LARK_TTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = LARK_TTS_DIR / f"{input_path.stem}.opus"
+    command = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        os.getenv("LARK_AUDIO_BITRATE", "24k"),
+        str(output_path),
+    ]
+    process = subprocess.run(
+        command,
+        cwd=str(Path(__file__).resolve().parents[2]),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=max(5, _int_env("LARK_AUDIO_CONVERT_TIMEOUT_SECONDS", 60)),
+    )
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout or "").strip()
+        raise RuntimeError(f"ffmpeg audio conversion failed: {detail or process.returncode}")
+    if not output_path.exists() or output_path.stat().st_size <= 0:
+        raise RuntimeError(f"ffmpeg did not create opus audio: {output_path}")
+    return output_path
+
+
+def _upload_lark_file(
+    file_path: str | Path,
+    *,
+    file_type: str,
+    app_id: str,
+    app_secret: str,
+    token: str = "",
+) -> str:
+    path = Path(file_path).expanduser().resolve()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Lark upload file does not exist: {path}")
+
+    upload_token = token or _get_tenant_access_token(app_id, app_secret)
+    suffix = path.suffix.lower()
+    if suffix == ".webm":
+        content_type = "audio/webm"
+    elif file_type == "opus":
+        content_type = "audio/ogg"
+    else:
+        content_type = "application/octet-stream"
+    response = _request_lark_multipart(
+        "/im/v1/files",
+        upload_token,
+        fields={"file_type": file_type, "file_name": path.name},
+        files={"file": (path.name, path.read_bytes(), content_type)},
+        timeout=max(10, _int_env("LARK_UPLOAD_TIMEOUT_SECONDS", 60)),
+    )
+    if int(response.get("code") or 0) != 0:
+        raise RuntimeError(f"Lark upload file failed: {response}")
+    file_key = str(_get_value(response, "data", "file_key") or "").strip()
+    if not file_key:
+        raise RuntimeError(f"Lark upload file returned no file_key: {response}")
+    return file_key
+
+
+def _image_content_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".gif":
+        return "image/gif"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".bmp":
+        return "image/bmp"
+    return "image/png"
+
+
+def _upload_lark_image(
+    file_path: str | Path,
+    *,
+    app_id: str,
+    app_secret: str,
+    token: str = "",
+) -> str:
+    path = Path(file_path).expanduser().resolve()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Lark upload image does not exist: {path}")
+
+    upload_token = token or _get_tenant_access_token(app_id, app_secret)
+    response = _request_lark_multipart(
+        "/im/v1/images",
+        upload_token,
+        fields={"image_type": "message"},
+        files={"image": (path.name, path.read_bytes(), _image_content_type(path))},
+        timeout=max(10, _int_env("LARK_UPLOAD_TIMEOUT_SECONDS", 60)),
+    )
+    if int(response.get("code") or 0) != 0:
+        raise RuntimeError(f"Lark upload image failed: {response}")
+    image_key = str(_get_value(response, "data", "image_key") or "").strip()
+    if not image_key:
+        raise RuntimeError(f"Lark upload image returned no image_key: {response}")
+    return image_key
+
+
+def send_lark_image(chat_id: str, image_path: str | Path, *, app_id: str, app_secret: str) -> None:
+    token = _get_tenant_access_token(app_id, app_secret)
+    image_key = _upload_lark_image(image_path, app_id=app_id, app_secret=app_secret, token=token)
+    response = _send_lark_message(
+        chat_id,
+        token,
+        msg_type="image",
+        content={"image_key": image_key},
+    )
+    if int(response.get("code") or 0) != 0:
+        raise RuntimeError(f"Lark send image failed: {response}")
+
+
+def send_lark_images_from_text(chat_id: str, text: str, *, app_id: str, app_secret: str) -> bool:
+    sent_any = False
+    for image_path in _extract_local_download_paths(text, IMAGE_SUFFIXES):
+        if not image_path.exists() or not image_path.is_file():
+            log_event("lark.image_missing", chat_id=chat_id, path=str(image_path))
+            continue
+        try:
+            send_lark_image(chat_id, image_path, app_id=app_id, app_secret=app_secret)
+        except Exception as exc:
+            log_event(
+                "lark.image_error",
+                chat_id=chat_id,
+                path=str(image_path),
+                error=repr(exc),
+                traceback=traceback.format_exc(),
+            )
+            continue
+        log_event("lark.image_sent", chat_id=chat_id, path=str(image_path))
+        sent_any = True
+    return sent_any
+
+
+def send_lark_audio(chat_id: str, audio_path: str | Path, *, app_id: str, app_secret: str) -> None:
+    token = _get_tenant_access_token(app_id, app_secret)
+    opus_path = _convert_audio_to_opus(Path(audio_path))
+    file_key = _upload_lark_file(opus_path, file_type="opus", app_id=app_id, app_secret=app_secret, token=token)
+    response = _send_lark_message(
+        chat_id,
+        token,
+        msg_type="audio",
+        content={"file_key": file_key},
+    )
+    if int(response.get("code") or 0) != 0:
+        raise RuntimeError(f"Lark send audio failed: {response}")
+
+
+def send_lark_audio_markers(chat_id: str, text: str, *, app_id: str, app_secret: str) -> bool:
+    sent_any = False
+    for audio_path in _extract_qingzhou_audio_marker_paths(text):
+        if not audio_path.exists() or not audio_path.is_file():
+            log_event("lark.marker_audio_missing", chat_id=chat_id, path=str(audio_path))
+            continue
+        try:
+            send_lark_audio(chat_id, audio_path, app_id=app_id, app_secret=app_secret)
+        except Exception as exc:
+            log_event(
+                "lark.marker_audio_error",
+                chat_id=chat_id,
+                path=str(audio_path),
+                error=repr(exc),
+                traceback=traceback.format_exc(),
+            )
+            continue
+        log_event("lark.marker_audio_sent", chat_id=chat_id, path=str(audio_path))
+        sent_any = True
+    return sent_any
+
+
+def _lark_voice_reply_enabled() -> bool:
+    return _bool_env("LARK_VOICE_REPLY_ENABLED", False)
+
+
+def send_lark_voice_reply(chat_id: str, text: str, *, app_id: str, app_secret: str) -> bool:
+    if not _lark_voice_reply_enabled():
+        return False
+    if not tts_enabled():
+        log_event("lark.voice_skipped", chat_id=chat_id, reason="tts_disabled")
+        return False
+
+    content = _strip_qingzhou_audio_markers(text)
+    if not content:
+        return False
+
+    result = synthesize_speech(
+        content,
+        voice=os.getenv("LARK_TTS_VOICE", ""),
+        audio_format=os.getenv("LARK_TTS_FORMAT", "opus"),
+    )
+    try:
+        send_lark_audio(chat_id, result["path"], app_id=app_id, app_secret=app_secret)
+    except Exception:
+        if str(result.get("provider") or "") != "edge_tts":
+            raise
+        fallback = synthesize_speech(
+            content,
+            provider=FALLBACK_PROVIDER,
+            voice=os.getenv("LARK_TTS_VOICE", ""),
+            audio_format="wav",
+        )
+        send_lark_audio(chat_id, fallback["path"], app_id=app_id, app_secret=app_secret)
+        result = {**fallback, "fallback_from": "edge_tts"}
+    log_event(
+        "lark.voice_sent",
+        chat_id=chat_id,
+        filename=result.get("filename", ""),
+        voice=result.get("voice", ""),
+    )
+    return True
+
+
 def send_lark_text(chat_id: str, text: str, *, app_id: str, app_secret: str) -> None:
     token = _get_tenant_access_token(app_id, app_secret)
-    for chunk in _reply_chunks(text):
+    clean_text = _strip_qingzhou_audio_markers(text)
+    if not clean_text:
+        return
+    for chunk in _reply_chunks(clean_text):
         response: dict[str, Any] | None = None
         card_error: Exception | None = None
         if _bool_env("LARK_MARKDOWN_ENABLED", True):
@@ -822,6 +1189,9 @@ class LarkWsBridge:
                 messages = result.get("messages", []) if isinstance(result, dict) else []
                 if messages:
                     _store_thread_history(thread_id, list(messages))
+                answer = extract_final_ai_text(result)
+                if answer:
+                    self._send_voice_reply_if_enabled(chat_id, answer)
                 log_event("lark.run_end", chat_id=chat_id, message_ids=[e.message_id for e in events], thread_id=thread_id)
                 self._finish_reactions(events, reaction_ids)
                 return
@@ -841,6 +1211,7 @@ class LarkWsBridge:
                 _store_thread_history(thread_id, list(messages))
             answer = extract_final_ai_text(result) or "我处理完了，但没有生成可发送的文本回复。"
             send_lark_text(chat_id, answer, app_id=self.app_id, app_secret=self.app_secret)
+            self._send_voice_reply_if_enabled(chat_id, answer)
             log_event("lark.run_end", chat_id=chat_id, message_ids=[e.message_id for e in events], thread_id=thread_id)
             self._finish_reactions(events, reaction_ids)
         except Exception as exc:
@@ -867,6 +1238,35 @@ class LarkWsBridge:
                     traceback=traceback.format_exc(),
                 )
             self._finish_reactions(events, reaction_ids)
+
+    def _send_voice_reply_if_enabled(self, chat_id: str, text: str) -> None:
+        try:
+            send_lark_images_from_text(
+                chat_id,
+                text,
+                app_id=self.app_id,
+                app_secret=self.app_secret,
+            )
+            if send_lark_audio_markers(
+                chat_id,
+                text,
+                app_id=self.app_id,
+                app_secret=self.app_secret,
+            ):
+                return
+            send_lark_voice_reply(
+                chat_id,
+                text,
+                app_id=self.app_id,
+                app_secret=self.app_secret,
+            )
+        except Exception as exc:
+            log_event(
+                "lark.voice_error",
+                chat_id=chat_id,
+                error=repr(exc),
+                traceback=traceback.format_exc(),
+            )
 
     def _prune_completed_messages(self) -> None:
         cutoff = time.monotonic() - 300
