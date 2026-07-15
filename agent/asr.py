@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ DEFAULT_MODEL = "iic/SenseVoiceSmall"
 DEFAULT_LANGUAGE = "auto"
 DEFAULT_MAX_AGE_SECONDS = 24 * 60 * 60
 _MODEL_CACHE: dict[tuple[str, str, bool], Any] = {}
+_MODEL_LOCK = threading.Lock()
 
 
 class AsrDependencyError(RuntimeError):
@@ -95,9 +97,13 @@ def _load_sensevoice_model(model_name: str, device: str, use_vad: bool):
             }
         )
 
-    model = AutoModel(**kwargs)
-    _MODEL_CACHE[key] = model
-    return model
+    with _MODEL_LOCK:
+        cached = _MODEL_CACHE.get(key)
+        if cached is not None:
+            return cached
+        model = AutoModel(**kwargs)
+        _MODEL_CACHE[key] = model
+        return model
 
 
 def _postprocess_text(text: str) -> str:

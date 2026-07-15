@@ -16,6 +16,8 @@ import { GenericInterruptView } from "./generic-interrupt";
 import { useArtifact } from "../artifact-hooks";
 
 const AUDIO_MARKER_REGEX = /\[\[qingzhou-audio:({.*?})\]\]/g;
+const VOICE_REPLY_WRAPPER_REGEX =
+  /(?:^|\n{2,})(?:让我(?:来|为你|帮你)?(?:合成|生成|准备|制作)?语音回复|语音回复|Voice reply)\s*[：:]\s*/i;
 
 interface VoiceReplyAudio {
   url: string;
@@ -23,12 +25,42 @@ interface VoiceReplyAudio {
   voice?: string;
 }
 
+function normalizeVoiceReplyText(text: string) {
+  return text.replace(/\s+/g, "").trim();
+}
+
+function stripDuplicateVoiceReplyText(text: string) {
+  const match = VOICE_REPLY_WRAPPER_REGEX.exec(text);
+  if (!match || match.index <= 0) {
+    return text;
+  }
+
+  const before = text.slice(0, match.index).trim();
+  const after = text.slice(match.index + match[0].length).trim();
+  if (!before || !after) {
+    return text;
+  }
+
+  const normalizedBefore = normalizeVoiceReplyText(before);
+  const normalizedAfter = normalizeVoiceReplyText(after);
+  if (
+    normalizedBefore &&
+    (normalizedBefore === normalizedAfter ||
+      normalizedAfter.startsWith(normalizedBefore) ||
+      normalizedBefore.startsWith(normalizedAfter))
+  ) {
+    return before;
+  }
+
+  return text;
+}
+
 function parseVoiceReplyAudio(content: string): {
   text: string;
   audioItems: VoiceReplyAudio[];
 } {
   const audioItems: VoiceReplyAudio[] = [];
-  const text = content
+  let text = content
     .replace(AUDIO_MARKER_REGEX, (_match, payloadText: string) => {
       try {
         const payload = JSON.parse(payloadText) as Record<string, unknown>;
@@ -47,6 +79,10 @@ function parseVoiceReplyAudio(content: string): {
       return "";
     })
     .trim();
+
+  if (audioItems.length > 0) {
+    text = stripDuplicateVoiceReplyText(text).trim();
+  }
 
   return { text, audioItems };
 }
@@ -230,6 +266,9 @@ export const AssistantMessage = memo(function AssistantMessage({
     "tool_calls" in message &&
     message.tool_calls &&
     message.tool_calls.length > 0;
+  const hasVoiceReplyToolCall =
+    hasToolCalls &&
+    message.tool_calls?.some((tc) => tc.name === "synthesize_speech_reply");
   const toolCallsHaveContents =
     hasToolCalls &&
     message.tool_calls?.some(
@@ -237,6 +276,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     );
   const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
   const isToolResult = message?.type === "tool";
+  const renderedDisplayContent = hasVoiceReplyToolCall ? "" : displayContent;
 
   if (isToolResult && hideToolCalls) {
     return null;
@@ -256,9 +296,9 @@ export const AssistantMessage = memo(function AssistantMessage({
           </>
         ) : (
           <>
-            {displayContent.length > 0 && (
+            {renderedDisplayContent.length > 0 && (
               <div className="py-1">
-                <MarkdownText>{displayContent}</MarkdownText>
+                <MarkdownText>{renderedDisplayContent}</MarkdownText>
               </div>
             )}
 
@@ -304,7 +344,7 @@ export const AssistantMessage = memo(function AssistantMessage({
                   isLoading={isLoading}
                 />
                 <CommandBar
-                  content={displayContent}
+                  content={renderedDisplayContent}
                   isLoading={isLoading}
                   isAiMessage={true}
                   handleRegenerate={() => handleRegenerate(parentCheckpoint)}

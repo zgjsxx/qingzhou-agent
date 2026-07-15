@@ -206,7 +206,8 @@ PROMPT_SECTIONS = {
     "voice_reply": (
         "When the user explicitly asks for a voice, spoken, audio, or read-aloud answer, "
         "first compose the final answer text, then call synthesize_speech_reply(text) with that same text. "
-        "Include the returned [[qingzhou-audio:{...}]] marker exactly once in the final answer. "
+        "The final answer must be the answer text followed by the returned [[qingzhou-audio:{...}]] marker exactly once. "
+        "Do not add an intro like 'I will synthesize a voice reply' and do not repeat the answer text after the marker. "
         "Do not put the marker in a code block and do not modify its JSON. "
         "If the tool is unavailable, explain that voice replies require starting with .\\start.ps1 -WithAsr."
     ),

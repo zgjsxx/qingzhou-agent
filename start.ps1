@@ -170,6 +170,41 @@ else {
 }
 
 $asrProcess = $null
+
+Write-Host "Starting backend..."
+$backendProcess = Start-Process `
+    -FilePath $pythonExe `
+    -ArgumentList @("-m", "langgraph_cli", "dev", "--no-reload", "--no-browser", "--host", "127.0.0.1", "--port", "2024") `
+    -WorkingDirectory $root `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput (Join-Path $logDir "backend.out.log") `
+    -RedirectStandardError (Join-Path $logDir "backend.err.log") `
+    -PassThru
+
+[ordered]@{
+    backendPid = $backendProcess.Id
+    frontendPid = $null
+    asrPid = $null
+    asrUrl = $null
+    ttsEnabled = [bool]$withVoiceRuntime
+    startedAt = (Get-Date).ToString("o")
+    url = $null
+} | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
+
+Write-Host "Waiting for backend readiness..."
+try {
+    Wait-HttpReady `
+        -Url "http://127.0.0.1:2024/info" `
+        -TimeoutSeconds $BackendTimeoutSeconds `
+        -ServiceName "Backend" `
+        -Process $backendProcess
+}
+catch {
+    & (Join-Path $root "stop.ps1")
+    throw
+}
+Write-Host "Backend is ready."
+
 if ($enableAsrServer) {
     Test-AsrServerDependencies
 
@@ -184,7 +219,7 @@ if ($enableAsrServer) {
         -PassThru
 
     [ordered]@{
-        backendPid = $null
+        backendPid = $backendProcess.Id
         frontendPid = $null
         asrPid = $asrProcess.Id
         asrUrl = "http://127.0.0.1:$AsrPort"
@@ -207,30 +242,6 @@ if ($enableAsrServer) {
     }
     Write-Host "ASR server is ready."
 }
-
-Write-Host "Starting backend..."
-$backendProcess = Start-Process `
-    -FilePath $pythonExe `
-    -ArgumentList @("-m", "langgraph_cli", "dev", "--no-reload", "--no-browser", "--host", "127.0.0.1", "--port", "2024") `
-    -WorkingDirectory $root `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput (Join-Path $logDir "backend.out.log") `
-    -RedirectStandardError (Join-Path $logDir "backend.err.log") `
-    -PassThru
-
-Write-Host "Waiting for backend readiness..."
-try {
-    Wait-HttpReady `
-        -Url "http://127.0.0.1:2024/info" `
-        -TimeoutSeconds $BackendTimeoutSeconds `
-        -ServiceName "Backend" `
-        -Process $backendProcess
-}
-catch {
-    & (Join-Path $root "stop.ps1")
-    throw
-}
-Write-Host "Backend is ready."
 
 $env:LANGGRAPH_API_URL = "http://127.0.0.1:2024"
 $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:3000/api"

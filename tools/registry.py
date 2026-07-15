@@ -851,8 +851,9 @@ def synthesize_speech_reply(text: str, voice: str = "") -> str:
     """Synthesize the assistant's reply text into local audio for Web playback.
 
     Use this only when the user explicitly asks for a voice/audio spoken answer.
-    First write the answer text normally, then call this tool with that same answer text.
-    After the tool returns, include the returned audio marker exactly once in the final answer.
+    Call this tool with the final answer text.
+    After the tool returns, append only the returned audio marker to the final answer exactly once.
+    Do not repeat the answer text after the marker.
 
     Args:
         text: The final answer text to synthesize.
@@ -877,7 +878,7 @@ def synthesize_speech_reply(text: str, voice: str = "") -> str:
     }
     marker = f"[[qingzhou-audio:{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}]]"
     return (
-        "Voice reply audio generated. Include this marker exactly once in your final answer:\n"
+        "Voice reply audio generated. Append only this marker to your final answer exactly once:\n"
         f"{marker}"
     )
 
