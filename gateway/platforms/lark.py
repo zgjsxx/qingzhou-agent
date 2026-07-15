@@ -29,6 +29,8 @@ DEFAULT_HISTORY_MAX_MESSAGES = 20
 DEFAULT_REPLY_MAX_CHARS = 12000
 DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 400
 LARK_ACK_EMOJI = os.getenv("LARK_ACK_EMOJI_TYPE", "OK")
+LARK_DONE_EMOJI = os.getenv("LARK_DONE_EMOJI_TYPE", "DONE")
+LARK_ERROR_EMOJI = os.getenv("LARK_ERROR_EMOJI_TYPE", "CROSS_MARK")
 ROOT_DIR = Path(__file__).resolve().parents[2]
 LARK_UPLOAD_DIR = ROOT_DIR / ".agent_uploads" / "lark"
 LARK_TTS_DIR = ROOT_DIR / ".agent_outputs" / "lark_tts"
@@ -1074,7 +1076,7 @@ class LarkWsBridge:
         self.reaction_executor = DaemonWorkerPool(max_workers=2, thread_name_prefix="lark-reaction")
         self._reaction_lock = threading.Lock()
         self._late_reactions: dict[str, str] = {}
-        self._completed_messages: dict[str, float] = {}
+        self._completed_messages: dict[str, tuple[float, str]] = {}
 
     def handle_event(self, data: Any) -> None:
         log_event("lark.event_received", raw=_safe_event_repr(data))
@@ -1107,15 +1109,16 @@ class LarkWsBridge:
 
             # reaction 返回时消息可能已经离开缓冲区，但 Agent 仍在处理中。
             # 这种情况下先保存 reaction，等最终回复流程结束后再清理。
-            remove_now = False
+            final_emoji = ""
             with self._reaction_lock:
                 self._prune_completed_messages()
-                if event.message_id in self._completed_messages:
-                    remove_now = True
+                completed = self._completed_messages.get(event.message_id)
+                if completed is not None:
+                    final_emoji = completed[1]
                 else:
                     self._late_reactions[event.message_id] = reaction_id
-            if remove_now:
-                self._remove_reaction(event.message_id, reaction_id)
+            if final_emoji:
+                self._replace_reaction(event.message_id, reaction_id, final_emoji)
         except Exception as exc:
             log_event("lark.reaction_add_error", message_id=event.message_id, error=repr(exc))
 
@@ -1154,7 +1157,7 @@ class LarkWsBridge:
                     app_id=self.app_id,
                     app_secret=self.app_secret,
                 )
-                self._finish_reactions(events, reaction_ids)
+                self._finish_reactions(events, reaction_ids, LARK_DONE_EMOJI)
                 return
 
         user_content = (
@@ -1193,7 +1196,7 @@ class LarkWsBridge:
                 if answer:
                     self._send_voice_reply_if_enabled(chat_id, answer)
                 log_event("lark.run_end", chat_id=chat_id, message_ids=[e.message_id for e in events], thread_id=thread_id)
-                self._finish_reactions(events, reaction_ids)
+                self._finish_reactions(events, reaction_ids, LARK_DONE_EMOJI)
                 return
 
             previous_messages = _history_for_thread(thread_id)
@@ -1213,7 +1216,7 @@ class LarkWsBridge:
             send_lark_text(chat_id, answer, app_id=self.app_id, app_secret=self.app_secret)
             self._send_voice_reply_if_enabled(chat_id, answer)
             log_event("lark.run_end", chat_id=chat_id, message_ids=[e.message_id for e in events], thread_id=thread_id)
-            self._finish_reactions(events, reaction_ids)
+            self._finish_reactions(events, reaction_ids, LARK_DONE_EMOJI)
         except Exception as exc:
             log_event(
                 "lark.run_error",
@@ -1237,7 +1240,7 @@ class LarkWsBridge:
                     error=repr(send_exc),
                     traceback=traceback.format_exc(),
                 )
-            self._finish_reactions(events, reaction_ids)
+            self._finish_reactions(events, reaction_ids, LARK_ERROR_EMOJI)
 
     def _send_voice_reply_if_enabled(self, chat_id: str, text: str) -> None:
         try:
@@ -1272,27 +1275,27 @@ class LarkWsBridge:
         cutoff = time.monotonic() - 300
         expired = [
             message_id
-            for message_id, completed_at in self._completed_messages.items()
+            for message_id, (completed_at, _emoji) in self._completed_messages.items()
             if completed_at < cutoff
         ]
         for message_id in expired:
             self._completed_messages.pop(message_id, None)
 
-    def _finish_reactions(self, events: list[LarkMessageEvent], reaction_ids: list[str]) -> None:
-        reactions_to_remove: list[tuple[str, str]] = []
+    def _finish_reactions(self, events: list[LarkMessageEvent], reaction_ids: list[str], final_emoji: str) -> None:
+        reactions_to_replace: list[tuple[str, str, str]] = []
         now = time.monotonic()
         with self._reaction_lock:
             self._prune_completed_messages()
             for index, event in enumerate(events):
-                self._completed_messages[event.message_id] = now
+                self._completed_messages[event.message_id] = (now, final_emoji)
                 buffered_reaction = reaction_ids[index] if index < len(reaction_ids) else ""
                 late_reaction = self._late_reactions.pop(event.message_id, "")
                 reaction_id = late_reaction or buffered_reaction
                 if reaction_id:
-                    reactions_to_remove.append((event.message_id, reaction_id))
+                    reactions_to_replace.append((event.message_id, reaction_id, final_emoji))
 
-        for message_id, reaction_id in reactions_to_remove:
-            self._remove_reaction(message_id, reaction_id)
+        for message_id, reaction_id, emoji_type in reactions_to_replace:
+            self._replace_reaction(message_id, reaction_id, emoji_type)
 
     def _remove_reaction(self, message_id: str, reaction_id: str) -> None:
         if not reaction_id:
@@ -1302,6 +1305,31 @@ class LarkWsBridge:
             log_event("lark.reaction_removed", message_id=message_id, reaction_id=reaction_id)
         except Exception as exc:
             log_event("lark.reaction_remove_error", message_id=message_id, reaction_id=reaction_id, error=repr(exc))
+
+    def _replace_reaction(self, message_id: str, reaction_id: str, emoji_type: str) -> None:
+        self._remove_reaction(message_id, reaction_id)
+        if not emoji_type:
+            return
+        try:
+            final_reaction_id = add_lark_reaction(
+                message_id,
+                emoji_type=emoji_type,
+                app_id=self.app_id,
+                app_secret=self.app_secret,
+            )
+            log_event(
+                "lark.reaction_final_added",
+                message_id=message_id,
+                emoji_type=emoji_type,
+                reaction_id=final_reaction_id,
+            )
+        except Exception as exc:
+            log_event(
+                "lark.reaction_final_add_error",
+                message_id=message_id,
+                emoji_type=emoji_type,
+                error=repr(exc),
+            )
 
     def run_forever(self) -> None:
         try:

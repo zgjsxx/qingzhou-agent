@@ -582,13 +582,33 @@ class AgentLarkTest(unittest.TestCase):
                 text="there", sender_id="ou_1",
             ),
         ]
-        with patch("agent_lark.delete_lark_reaction") as del_reaction:
-            bridge._finish_reactions(events, ["re_1", "re_2"])
+        with (
+            patch("agent_lark.delete_lark_reaction") as del_reaction,
+            patch("agent_lark.add_lark_reaction") as add_reaction,
+        ):
+            bridge._finish_reactions(events, ["re_1", "re_2"], agent_lark.LARK_DONE_EMOJI)
             self.assertEqual(
                 del_reaction.call_args_list,
                 [
                     unittest.mock.call("om_1", "re_1", app_id="app", app_secret="secret"),
                     unittest.mock.call("om_2", "re_2", app_id="app", app_secret="secret"),
+                ],
+            )
+            self.assertEqual(
+                add_reaction.call_args_list,
+                [
+                    unittest.mock.call(
+                        "om_1",
+                        emoji_type=agent_lark.LARK_DONE_EMOJI,
+                        app_id="app",
+                        app_secret="secret",
+                    ),
+                    unittest.mock.call(
+                        "om_2",
+                        emoji_type=agent_lark.LARK_DONE_EMOJI,
+                        app_id="app",
+                        app_secret="secret",
+                    ),
                 ],
             )
 
@@ -602,16 +622,23 @@ class AgentLarkTest(unittest.TestCase):
         )
 
         with (
-            patch("agent_lark.add_lark_reaction", return_value="re_late"),
+            patch("agent_lark.add_lark_reaction", side_effect=["re_late", "re_done"]) as add_reaction,
             patch("agent_lark._pending_buffer.set_reaction", return_value=False),
             patch("agent_lark.delete_lark_reaction") as del_reaction,
         ):
             bridge._add_reaction(event)
             del_reaction.assert_not_called()
-            bridge._finish_reactions([event], [""])
+            bridge._finish_reactions([event], [""], agent_lark.LARK_DONE_EMOJI)
 
         del_reaction.assert_called_once_with(
             "om_late", "re_late", app_id="app", app_secret="secret",
+        )
+        self.assertEqual(add_reaction.call_count, 2)
+        add_reaction.assert_called_with(
+            "om_late",
+            emoji_type=agent_lark.LARK_DONE_EMOJI,
+            app_id="app",
+            app_secret="secret",
         )
 
 
