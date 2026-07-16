@@ -62,6 +62,7 @@ class LarkMessageEvent:
     file_key: str = ""
     image_key: str = ""
     filename: str = ""
+    duration_ms: int = 0
 
 
 class _PendingBuffer:
@@ -237,11 +238,19 @@ def parse_lark_message_event(data: Any) -> LarkMessageEvent | None:
     file_key = ""
     image_key = ""
     filename = ""
+    duration_ms = 0
     if message_type == "file":
         file_key = str(content_data.get("file_key") or "").strip()
         filename = str(content_data.get("file_name") or "").strip()
     elif message_type == "image":
         image_key = str(content_data.get("image_key") or "").strip()
+    elif message_type in {"audio", "media"}:
+        file_key = str(content_data.get("file_key") or "").strip()
+        filename = str(content_data.get("file_name") or content_data.get("filename") or "").strip()
+        try:
+            duration_ms = int(content_data.get("duration") or content_data.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            duration_ms = 0
 
     if not message_id or not chat_id:
         return None
@@ -254,6 +263,7 @@ def parse_lark_message_event(data: Any) -> LarkMessageEvent | None:
         file_key=file_key,
         image_key=image_key,
         filename=filename,
+        duration_ms=duration_ms,
     )
 
 
@@ -384,6 +394,38 @@ def _event_to_text_fragment(event: LarkMessageEvent, app_id: str, app_secret: st
     """Convert a single LarkMessageEvent into a text fragment for the merged prompt."""
     if event.text:
         return f"文本消息: {event.text}"
+
+    if event.message_type in {"audio", "media"} and event.file_key:
+        info = _download_lark_resource(
+            event.message_id,
+            event.file_key,
+            "audio",
+            preferred_filename=event.filename,
+            app_id=app_id,
+            app_secret=app_secret,
+        )
+        if info.get("error"):
+            return f"语音消息: (下载失败: {info['error']})"
+        transcript = _transcribe_lark_audio(info["path"])
+        if transcript.get("error"):
+            return (
+                f"语音消息:\n"
+                f"  filename: {info['filename']}\n"
+                f"  size: {info['size']}\n"
+                f"  path: {info['path']}\n"
+                f"  transcription_error: {transcript['error']}"
+            )
+        text = str(transcript.get("text") or "").strip()
+        if not text:
+            text = "(未识别到文字)"
+        duration = f"\n  duration_ms: {event.duration_ms}" if event.duration_ms else ""
+        return (
+            f"语音消息:{duration}\n"
+            f"  filename: {info['filename']}\n"
+            f"  size: {info['size']}\n"
+            f"  path: {info['path']}\n"
+            f"  transcription: {text}"
+        )
 
     if event.message_type == "file" and event.file_key:
         info = _download_lark_resource(
@@ -606,6 +648,24 @@ def _request_lark_multipart(
         raise RuntimeError(f"Lark API HTTP {exc.code}: {detail}") from exc
 
 
+def _request_local_multipart(
+    url: str,
+    *,
+    fields: dict[str, str],
+    files: dict[str, tuple[str, bytes, str]],
+    timeout: int = 120,
+) -> dict[str, Any]:
+    data, boundary = _multipart_form_data(fields, files)
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def _download_lark_resource(
     message_id: str,
     resource_key: str,
@@ -625,8 +685,14 @@ def _download_lark_resource(
     LARK_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     token = _get_tenant_access_token(app_id, app_secret)
 
-    # type 参数：file 消息用 "file"，image 消息用 "image"
-    resource_type_param = "file" if resource_type == "files" else "image"
+    # type 参数：file/audio 消息用 "file"，image 消息用 "image"。
+    # 如果飞书后续要求 audio 专用 type，可通过 LARK_AUDIO_RESOURCE_TYPE 覆盖。
+    if resource_type == "images":
+        resource_type_param = "image"
+    elif resource_type == "audio":
+        resource_type_param = os.getenv("LARK_AUDIO_RESOURCE_TYPE", "file").strip() or "file"
+    else:
+        resource_type_param = "file"
     api_path = f"/im/v1/messages/{message_id}/resources/{resource_key}"
     query_string = f"?type={resource_type_param}"
     url = f"{LARK_API_BASE_URL}{api_path}{query_string}"
@@ -666,7 +732,12 @@ def _download_lark_resource(
             if remote_filename:
                 safe_name = re.sub(r'[<>:"/\\|?*]', '_', remote_filename)
             else:
-                ext = ".png" if resource_type == "images" else ".bin"
+                if resource_type == "images":
+                    ext = ".png"
+                elif resource_type == "audio":
+                    ext = ".opus"
+                else:
+                    ext = ".bin"
                 safe_name = f"{resource_key}{ext}"
 
             local_path = LARK_UPLOAD_DIR / safe_name
@@ -707,6 +778,69 @@ def _download_lark_resource(
             "size": "",
             "error": str(exc),
         }
+
+
+def _asr_server_url() -> str:
+    configured = os.getenv("QINGZHOU_ASR_URL", "").strip().rstrip("/")
+    return configured or "http://127.0.0.1:8765"
+
+
+def _audio_content_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".mp3":
+        return "audio/mpeg"
+    if suffix in {".wav", ".wave"}:
+        return "audio/wav"
+    if suffix == ".ogg":
+        return "audio/ogg"
+    if suffix == ".webm":
+        return "audio/webm"
+    if suffix in {".m4a", ".mp4"}:
+        return "audio/mp4"
+    if suffix == ".opus":
+        return "audio/ogg"
+    return "application/octet-stream"
+
+
+def _transcribe_with_asr_server(audio_path: Path, language: str) -> dict[str, Any]:
+    response = _request_local_multipart(
+        f"{_asr_server_url()}/transcribe",
+        fields={"language": language},
+        files={"file": (audio_path.name, audio_path.read_bytes(), _audio_content_type(audio_path))},
+        timeout=max(10, _int_env("LARK_ASR_TIMEOUT_SECONDS", 180)),
+    )
+    if not response.get("ok"):
+        raise RuntimeError(f"ASR server returned failure: {response}")
+    return response
+
+
+def _transcribe_lark_audio(audio_path: str | Path) -> dict[str, Any]:
+    path = Path(audio_path).expanduser().resolve()
+    language = os.getenv("LARK_ASR_LANGUAGE", os.getenv("SENSEVOICE_LANGUAGE", "auto")).strip() or "auto"
+    try:
+        result = _transcribe_with_asr_server(path, language)
+        log_event("lark.audio_transcribed", path=str(path), provider="asr_server")
+        return result
+    except Exception as exc:
+        log_event("lark.audio_asr_server_error", path=str(path), error=repr(exc))
+        if not _bool_env("LARK_ASR_LOCAL_FALLBACK", True):
+            return {"text": "", "error": str(exc), "error_type": type(exc).__name__}
+
+    try:
+        from agent.asr import transcribe_audio
+
+        result = transcribe_audio(path, language=language)
+        result.pop("raw", None)
+        log_event("lark.audio_transcribed", path=str(path), provider="local")
+        return result
+    except Exception as exc:
+        log_event(
+            "lark.audio_transcribe_error",
+            path=str(path),
+            error=repr(exc),
+            traceback=traceback.format_exc(),
+        )
+        return {"text": "", "error": str(exc), "error_type": type(exc).__name__}
 
 
 def _reply_chunks(text: str) -> list[str]:

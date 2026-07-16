@@ -96,6 +96,29 @@ class AgentLarkTest(unittest.TestCase):
         self.assertEqual(event.image_key, "img_xyz")
         self.assertEqual(event.message_type, "image")
 
+    def test_parse_audio_message_event(self):
+        data = {
+            "event": {
+                "message": {
+                    "message_id": "om_audio",
+                    "chat_id": "oc_audio",
+                    "message_type": "audio",
+                    "content": json.dumps(
+                        {"file_key": "file_audio", "file_name": "voice.opus", "duration": 1200}
+                    ),
+                },
+                "sender": {"sender_id": {"open_id": "ou_1"}},
+            }
+        }
+
+        event = agent_lark.parse_lark_message_event(data)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.file_key, "file_audio")
+        self.assertEqual(event.filename, "voice.opus")
+        self.assertEqual(event.duration_ms, 1200)
+        self.assertEqual(event.message_type, "audio")
+
     def test_parse_post_message_event(self):
         content = {
             "content": [
@@ -349,6 +372,26 @@ class AgentLarkTest(unittest.TestCase):
             content={"file_key": "file_voice"},
         )
 
+    def test_transcribe_with_asr_server_posts_audio_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = Path(tmpdir) / "voice.opus"
+            audio_path.write_bytes(b"opus")
+
+            with (
+                patch.dict("os.environ", {"QINGZHOU_ASR_URL": "http://127.0.0.1:9999"}),
+                patch(
+                    "agent_lark._request_local_multipart",
+                    return_value={"ok": True, "text": "转写内容"},
+                ) as request_multipart,
+            ):
+                result = agent_lark._transcribe_with_asr_server(audio_path, "auto")
+
+        self.assertEqual(result["text"], "转写内容")
+        request_multipart.assert_called_once()
+        self.assertEqual(request_multipart.call_args.args[0], "http://127.0.0.1:9999/transcribe")
+        self.assertEqual(request_multipart.call_args.kwargs["fields"], {"language": "auto"})
+        self.assertIn("file", request_multipart.call_args.kwargs["files"])
+
     def test_send_lark_audio_markers_sends_marker_audio(self):
         audio_path = agent_lark.ROOT_DIR / ".agent_outputs" / "tts" / "marker-test.wav"
         audio_path.parent.mkdir(parents=True, exist_ok=True)
@@ -537,6 +580,50 @@ class AgentLarkTest(unittest.TestCase):
             app_id="app",
             app_secret="secret",
         )
+
+    def test_process_merged_events_audio_event_transcribes_before_invoke(self):
+        captured_payloads = []
+
+        def invoke(payload, *_args, **_kwargs):
+            captured_payloads.append(payload)
+            return {"messages": [SimpleNamespace(type="ai", content="收到语音")]}
+
+        graph = SimpleNamespace(invoke=invoke)
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        events = [
+            agent_lark.LarkMessageEvent(
+                message_id="om_audio",
+                chat_id="oc_audio",
+                message_type="audio",
+                text="",
+                file_key="file_audio",
+                filename="voice.opus",
+                duration_ms=1200,
+                sender_id="ou_1",
+            ),
+        ]
+        download_info = {"path": "/tmp/voice.opus", "filename": "voice.opus", "size": "8KB"}
+
+        with (
+            patch("agent_lark._download_lark_resource", return_value=download_info) as mock_download,
+            patch("agent_lark._transcribe_lark_audio", return_value={"text": "帮我查一下天气"}) as transcribe,
+            patch("agent_lark.send_lark_text"),
+            patch("agent_lark._stream_channel_messages_enabled", return_value=False),
+        ):
+            bridge._process_merged_events(events, ["re_1"])
+
+        mock_download.assert_called_once_with(
+            "om_audio",
+            "file_audio",
+            "audio",
+            preferred_filename="voice.opus",
+            app_id="app",
+            app_secret="secret",
+        )
+        transcribe.assert_called_once_with("/tmp/voice.opus")
+        user_content = captured_payloads[0]["messages"][-1]["content"]
+        self.assertIn("语音消息", user_content)
+        self.assertIn("transcription: 帮我查一下天气", user_content)
 
     def test_add_lark_reaction_returns_reaction_id(self):
         with (
