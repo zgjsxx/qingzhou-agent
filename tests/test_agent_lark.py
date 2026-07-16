@@ -25,6 +25,8 @@ class AgentLarkTest(unittest.TestCase):
             buf._timers.clear()
             buf._events.clear()
             buf._reaction_ids.clear()
+        with agent_lark._seen_lock:
+            agent_lark._seen_message_ids.clear()
 
     def test_worker_pool_uses_daemon_threads(self):
         pool = agent_lark.DaemonWorkerPool(max_workers=2, thread_name_prefix="test-lark")
@@ -55,6 +57,184 @@ class AgentLarkTest(unittest.TestCase):
         self.assertEqual(event.chat_id, "oc_456")
         self.assertEqual(event.sender_id, "ou_123")
         self.assertEqual(event.text, "你好")
+
+    def test_parse_group_mentions(self):
+        data = {
+            "event": {
+                "message": {
+                    "message_id": "om_group",
+                    "chat_id": "oc_group",
+                    "chat_type": "group",
+                    "message_type": "text",
+                    "content": json.dumps({"text": "@轻舟 帮我看下"}),
+                    "mentions": [
+                        {
+                            "key": "@_user_1",
+                            "name": "轻舟",
+                            "id": {"open_id": "ou_bot"},
+                        }
+                    ],
+                },
+                "sender": {"sender_id": {"open_id": "ou_1"}},
+            }
+        }
+
+        event = agent_lark.parse_lark_message_event(data)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.chat_type, "group")
+        self.assertIn("ou_bot", event.mention_ids)
+        self.assertIn("轻舟", event.mention_names)
+
+    def test_group_message_requires_mention_by_default(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_group",
+            chat_id="oc_group",
+            chat_type="group",
+            message_type="text",
+            text="普通群消息",
+            sender_id="ou_1",
+        )
+
+        self.assertFalse(agent_lark.should_process_lark_event(event))
+
+    def test_group_message_with_bot_mention_is_processed(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_group",
+            chat_id="oc_group",
+            chat_type="group",
+            message_type="text",
+            text="@轻舟 帮我看下",
+            sender_id="ou_1",
+            mention_ids=("ou_bot",),
+        )
+
+        with patch.dict("os.environ", {"LARK_BOT_OPEN_ID": "ou_bot"}, clear=False):
+            self.assertTrue(agent_lark.should_process_lark_event(event))
+
+    def test_group_message_with_raw_lark_mention_token_is_processed_without_bot_identity(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_group",
+            chat_id="oc_group",
+            chat_type="group",
+            message_type="text",
+            text="@_user_1 你好",
+            sender_id="ou_1",
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "LARK_BOT_OPEN_ID": "",
+                "FEISHU_BOT_OPEN_ID": "",
+                "LARK_BOT_USER_ID": "",
+                "FEISHU_BOT_USER_ID": "",
+                "LARK_BOT_UNION_ID": "",
+                "FEISHU_BOT_UNION_ID": "",
+                "LARK_BOT_NAME": "",
+                "FEISHU_BOT_NAME": "",
+            },
+            clear=False,
+        ):
+            self.assertTrue(agent_lark.should_process_lark_event(event))
+
+    def test_private_message_does_not_require_mention(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_private",
+            chat_id="oc_private",
+            chat_type="p2p",
+            message_type="text",
+            text="你好",
+            sender_id="ou_1",
+        )
+
+        self.assertTrue(agent_lark.should_process_lark_event(event))
+
+    def test_lark_allowed_users_empty_allows_everyone(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_private",
+            chat_id="oc_private",
+            chat_type="p2p",
+            message_type="text",
+            text="你好",
+            sender_id="ou_anyone",
+        )
+
+        with patch.dict("os.environ", {"LARK_ALLOWED_USERS": "", "FEISHU_ALLOWED_USERS": ""}, clear=False):
+            self.assertTrue(agent_lark.should_process_lark_event(event))
+
+    def test_lark_allowed_users_allows_matching_sender(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_private",
+            chat_id="oc_private",
+            chat_type="p2p",
+            message_type="text",
+            text="你好",
+            sender_id="ou_allowed",
+        )
+
+        with patch.dict("os.environ", {"LARK_ALLOWED_USERS": "ou_allowed,ou_other"}, clear=False):
+            self.assertTrue(agent_lark.should_process_lark_event(event))
+
+    def test_lark_allowed_users_blocks_non_matching_sender(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_private",
+            chat_id="oc_private",
+            chat_type="p2p",
+            message_type="text",
+            text="你好",
+            sender_id="ou_blocked",
+        )
+
+        with patch.dict("os.environ", {"LARK_ALLOWED_USERS": "ou_allowed"}, clear=False):
+            self.assertFalse(agent_lark.should_process_lark_event(event))
+
+    def test_handle_event_ignores_unmentioned_group_message_before_reaction(self):
+        graph = SimpleNamespace(invoke=MagicMock())
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        data = {
+            "event": {
+                "message": {
+                    "message_id": "om_ignore",
+                    "chat_id": "oc_group",
+                    "chat_type": "group",
+                    "message_type": "text",
+                    "content": json.dumps({"text": "普通群消息"}),
+                },
+                "sender": {"sender_id": {"open_id": "ou_1"}},
+            }
+        }
+
+        with patch.object(bridge.reaction_executor, "submit") as submit_reaction:
+            bridge.handle_event(data)
+
+        submit_reaction.assert_not_called()
+        graph.invoke.assert_not_called()
+
+    def test_handle_event_ignores_disallowed_user_before_reaction(self):
+        graph = SimpleNamespace(invoke=MagicMock())
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        data = {
+            "event": {
+                "message": {
+                    "message_id": "om_user_blocked",
+                    "chat_id": "oc_private",
+                    "chat_type": "p2p",
+                    "message_type": "text",
+                    "content": json.dumps({"text": "你好"}),
+                },
+                "sender": {"sender_id": {"open_id": "ou_blocked"}},
+            }
+        }
+
+        with (
+            patch.dict("os.environ", {"LARK_ALLOWED_USERS": "ou_allowed"}, clear=False),
+            patch.object(bridge.reaction_executor, "submit") as submit_reaction,
+        ):
+            bridge.handle_event(data)
+
+        submit_reaction.assert_not_called()
+        graph.invoke.assert_not_called()
 
     def test_parse_file_message_event(self):
         data = {

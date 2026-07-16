@@ -58,7 +58,10 @@ class LarkMessageEvent:
     chat_id: str
     message_type: str
     text: str
+    chat_type: str = ""
     sender_id: str = ""
+    mention_ids: tuple[str, ...] = field(default_factory=tuple)
+    mention_names: tuple[str, ...] = field(default_factory=tuple)
     file_key: str = ""
     image_key: str = ""
     filename: str = ""
@@ -217,6 +220,67 @@ def _extract_text_content(message_type: str, content: Any) -> str:
     return ""
 
 
+def _collect_lark_mentions(*sources: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    ids: list[str] = []
+    names: list[str] = []
+
+    def add_id(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text not in ids:
+            ids.append(text)
+
+    def add_name(value: Any) -> None:
+        text = str(value or "").strip().lstrip("@")
+        if text and text not in names:
+            names.append(text)
+
+    def visit(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            parsed = _parse_json_object(value)
+            if parsed:
+                visit(parsed)
+            return
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+            return
+        if isinstance(value, dict):
+            text = str(value.get("text") or "")
+            for token in re.findall(r"@_[A-Za-z0-9_]+", text):
+                add_name(token)
+            tag = str(value.get("tag") or "").lower()
+            if tag in {"at", "mention"}:
+                add_name(value.get("user_name") or value.get("name") or value.get("text"))
+                add_id(value.get("user_id") or value.get("open_id") or value.get("union_id"))
+            for key in ("key", "name", "display_name", "user_name", "tenant_key"):
+                add_name(value.get(key))
+            id_data = value.get("id")
+            if isinstance(id_data, dict):
+                for key in ("open_id", "user_id", "union_id"):
+                    add_id(id_data.get(key))
+            for key in ("open_id", "user_id", "union_id"):
+                add_id(value.get(key))
+            for key in ("mentions", "content"):
+                visit(value.get(key))
+            return
+        for key in ("key", "name", "display_name", "user_name", "tenant_key"):
+            add_name(getattr(value, key, None))
+        id_data = getattr(value, "id", None)
+        if id_data is not None:
+            visit(id_data)
+        for key in ("open_id", "user_id", "union_id"):
+            add_id(getattr(value, key, None))
+        mentions = getattr(value, "mentions", None)
+        if mentions is not None:
+            visit(mentions)
+
+    for source in sources:
+        visit(source)
+    return tuple(ids), tuple(names)
+
+
 def parse_lark_message_event(data: Any) -> LarkMessageEvent | None:
     """Extract the fields we need from the SDK event object."""
     event = _get_value(data, "event") or data
@@ -226,10 +290,12 @@ def parse_lark_message_event(data: Any) -> LarkMessageEvent | None:
 
     message_id = str(_get_value(message, "message_id") or "").strip()
     chat_id = str(_get_value(message, "chat_id") or "").strip()
+    chat_type = str(_get_value(message, "chat_type") or "").strip()
     message_type = str(_get_value(message, "message_type") or "").strip()
     content = _get_value(message, "content")
     content_data = _parse_json_object(content)
     text = _extract_text_content(message_type, content)
+    mention_ids, mention_names = _collect_lark_mentions(_get_value(message, "mentions"), content_data)
     sender_id = (
         str(_get_value(event, "sender", "sender_id", "open_id") or "").strip()
         or str(_get_value(event, "sender", "sender_id", "user_id") or "").strip()
@@ -257,9 +323,12 @@ def parse_lark_message_event(data: Any) -> LarkMessageEvent | None:
     return LarkMessageEvent(
         message_id=message_id,
         chat_id=chat_id,
+        chat_type=chat_type,
         message_type=message_type,
         text=text,
         sender_id=sender_id,
+        mention_ids=mention_ids,
+        mention_names=mention_names,
         file_key=file_key,
         image_key=image_key,
         filename=filename,
@@ -278,6 +347,70 @@ def _safe_event_repr(data: Any, limit: int = 1000) -> str:
 def _thread_id_for_chat(chat_id: str) -> str:
     safe_id = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", chat_id).strip("_")
     return f"lark_{safe_id or 'unknown'}"
+
+
+def _csv_env_values(*names: str) -> set[str]:
+    values: set[str] = set()
+    for name in names:
+        raw = os.getenv(name, "")
+        for item in raw.split(","):
+            value = item.strip()
+            if value:
+                values.add(value)
+    return values
+
+
+def _lark_group_require_mention() -> bool:
+    if "LARK_GROUP_REQUIRE_MENTION" in os.environ:
+        return _bool_env("LARK_GROUP_REQUIRE_MENTION", True)
+    return _bool_env("LARK_REQUIRE_MENTION", True)
+
+
+def _is_lark_group_chat(event: LarkMessageEvent) -> bool:
+    chat_type = event.chat_type.strip().lower()
+    return chat_type in {"group", "chat", "group_chat"}
+
+
+def _is_bot_mentioned(event: LarkMessageEvent) -> bool:
+    bot_ids = _csv_env_values(
+        "LARK_BOT_OPEN_ID",
+        "FEISHU_BOT_OPEN_ID",
+        "LARK_BOT_USER_ID",
+        "FEISHU_BOT_USER_ID",
+        "LARK_BOT_UNION_ID",
+        "FEISHU_BOT_UNION_ID",
+    )
+    mentioned_ids = {value for value in event.mention_ids if value}
+    if bot_ids:
+        return bool(bot_ids & mentioned_ids)
+
+    bot_names = _csv_env_values("LARK_BOT_NAME", "FEISHU_BOT_NAME")
+    mentioned_names = {value.lstrip("@") for value in event.mention_names if value}
+    if bot_names:
+        return bool(bot_names & mentioned_names)
+
+    # Without configured bot identity, any explicit mention is treated as a
+    # trigger. This keeps group chats quiet while avoiding a brittle setup step.
+    if mentioned_ids or mentioned_names:
+        return True
+    return bool(re.search(r"(^|\s)@_[A-Za-z0-9_]+(\s|$)", event.text or ""))
+
+
+def _is_lark_sender_allowed(event: LarkMessageEvent) -> bool:
+    allowed_users = _csv_env_values("LARK_ALLOWED_USERS", "FEISHU_ALLOWED_USERS")
+    if not allowed_users:
+        return True
+    return bool(event.sender_id and event.sender_id in allowed_users)
+
+
+def should_process_lark_event(event: LarkMessageEvent) -> bool:
+    if not _is_lark_sender_allowed(event):
+        return False
+    if not _is_lark_group_chat(event):
+        return True
+    if not _lark_group_require_mention():
+        return True
+    return _is_bot_mentioned(event)
 
 
 def _remember_seen_message(message_id: str) -> bool:
@@ -1228,6 +1361,24 @@ class LarkWsBridge:
         )
         if not _remember_seen_message(event.message_id):
             log_event("lark.event_ignored", reason="duplicate", message_id=event.message_id)
+            return
+        if not _is_lark_sender_allowed(event):
+            log_event(
+                "lark.event_ignored",
+                reason="user_not_allowed",
+                chat_id=event.chat_id,
+                message_id=event.message_id,
+                sender_id=event.sender_id,
+            )
+            return
+        if not should_process_lark_event(event):
+            log_event(
+                "lark.event_ignored",
+                reason="group_mention_required",
+                chat_id=event.chat_id,
+                message_id=event.message_id,
+                chat_type=event.chat_type,
+            )
             return
         # 先进入合并缓冲区，再异步添加确认表情。飞书 reaction API 偶尔耗时数秒，
         # 如果同步等待它返回，后续消息无法及时进入缓冲区，会错过合并窗口。
