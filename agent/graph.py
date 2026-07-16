@@ -11,6 +11,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
+from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.config import config_str
 from agent.commands import AgentCommandMiddleware
@@ -101,17 +102,22 @@ middleware = [
 if is_agent_logging_enabled():
     middleware.append(AgentLoggingMiddleware())
 
-graph = create_agent(
-    model=MODEL,
-    tools=AGENT_TOOLS,
-    middleware=middleware,
-    state_schema=XuAgentState,
-    system_prompt=get_system_prompt(PROMPT_CONTEXT),
-)
+def _create_agent_graph(*, checkpointer=None):
+    return create_agent(
+        model=MODEL,
+        tools=AGENT_TOOLS,
+        middleware=middleware,
+        state_schema=XuAgentState,
+        system_prompt=get_system_prompt(PROMPT_CONTEXT),
+        checkpointer=checkpointer,
+    )
+
+
+graph = _create_agent_graph()
 
 if not QINGZHOU_CLI_MODE:
     start_cron_scheduler()
-    start_lark_ws_bridge(graph)
+    start_lark_ws_bridge(_create_agent_graph(checkpointer=InMemorySaver()))
     start_botpy_bridge(graph)
     start_weixin_bridge(graph)
     start_telegram_bridge(graph)

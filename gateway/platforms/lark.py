@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from langgraph.types import Command
+
 from agent.commands import handle_thread_slash_command
 from agent.logging import log_event
 from agent.tts import FALLBACK_PROVIDER, synthesize_speech, tts_enabled
@@ -50,6 +52,18 @@ _seen_lock = threading.Lock()
 _token_lock = threading.Lock()
 _tenant_access_token_value = ""
 _tenant_access_token_expires_at = 0.0
+
+
+@dataclass
+class LarkPendingApproval:
+    approval_id: str
+    thread_id: str
+    chat_id: str
+    requester_id: str
+    interrupt_value: Any
+    message_ids: tuple[str, ...]
+    reaction_ids: tuple[str, ...]
+    created_at: float = field(default_factory=time.time)
 
 
 @dataclass(frozen=True)
@@ -401,6 +415,13 @@ def _is_lark_sender_allowed(event: LarkMessageEvent) -> bool:
     if not allowed_users:
         return True
     return bool(event.sender_id and event.sender_id in allowed_users)
+
+
+def _is_lark_approval_operator_allowed(operator_id: str, pending: LarkPendingApproval) -> bool:
+    if operator_id and operator_id == pending.requester_id:
+        return True
+    approval_users = _csv_env_values("LARK_APPROVAL_ALLOWED_USERS", "FEISHU_APPROVAL_ALLOWED_USERS")
+    return bool(operator_id and operator_id in approval_users)
 
 
 def should_process_lark_event(event: LarkMessageEvent) -> bool:
@@ -1015,6 +1036,86 @@ def _lark_markdown_card(content: str) -> dict[str, Any]:
     }
 
 
+def _interrupts_from_result(result: Any) -> list[Any]:
+    if not isinstance(result, dict):
+        return []
+    interrupts = result.get("__interrupt__") or []
+    if isinstance(interrupts, list):
+        return interrupts
+    return [interrupts]
+
+
+def _interrupt_value(interrupt_obj: Any) -> Any:
+    return getattr(interrupt_obj, "value", interrupt_obj)
+
+
+def _approval_summary(interrupt_value: Any) -> tuple[str, str, dict[str, Any]]:
+    action_requests = _get_value(interrupt_value, "action_requests") or []
+    action = action_requests[0] if isinstance(action_requests, list) and action_requests else {}
+    name = str(_get_value(action, "name") or "tool_call")
+    description = str(_get_value(action, "description") or "This action requires approval.")
+    args = _get_value(action, "args") or {}
+    return name, description, args if isinstance(args, dict) else {}
+
+
+def _json_preview(value: Any, limit: int = 1200) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+    except Exception:
+        text = repr(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...[truncated {len(text) - limit} chars]"
+
+
+def _lark_approval_card(approval_id: str, interrupt_value: Any) -> dict[str, Any]:
+    tool_name, description, args = _approval_summary(interrupt_value)
+    args_preview = _json_preview(args)
+    return {
+        "schema": "2.0",
+        "config": {"update_multi": True},
+        "body": {
+            "direction": "vertical",
+            "padding": "12px 12px 12px 12px",
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"**需要审批工具调用**\n\n"
+                        f"- 工具：`{tool_name}`\n"
+                        f"- 原因：{description}\n\n"
+                        f"参数：\n```json\n{args_preview}\n```"
+                    ),
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "批准"},
+                    "type": "primary",
+                    "value": {"approval_id": approval_id, "decision": "approve"},
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "拒绝"},
+                    "type": "danger",
+                    "value": {"approval_id": approval_id, "decision": "reject"},
+                },
+            ],
+        },
+    }
+
+
+def send_lark_approval_card(chat_id: str, approval_id: str, interrupt_value: Any, *, app_id: str, app_secret: str) -> None:
+    token = _get_tenant_access_token(app_id, app_secret)
+    response = _send_lark_message(
+        chat_id,
+        token,
+        msg_type="interactive",
+        content=_lark_approval_card(approval_id, interrupt_value),
+    )
+    if int(response.get("code") or 0) != 0:
+        raise RuntimeError(f"Lark send approval card failed: {response}")
+
+
 def _send_lark_message(
     chat_id: str,
     token: str,
@@ -1344,6 +1445,8 @@ class LarkWsBridge:
         self._reaction_lock = threading.Lock()
         self._late_reactions: dict[str, str] = {}
         self._completed_messages: dict[str, tuple[float, str]] = {}
+        self._approval_lock = threading.Lock()
+        self._pending_approvals: dict[str, LarkPendingApproval] = {}
 
     def handle_event(self, data: Any) -> None:
         log_event("lark.event_received", raw=_safe_event_repr(data))
@@ -1384,6 +1487,41 @@ class LarkWsBridge:
         # 如果同步等待它返回，后续消息无法及时进入缓冲区，会错过合并窗口。
         _pending_buffer.add(event, "", on_flush=self._flush_merged_events)
         self.reaction_executor.submit(self._add_reaction, event)
+
+    def handle_card_action(self, data: Any) -> dict[str, Any]:
+        event = _get_value(data, "event") or data
+        action_value = _get_value(event, "action", "value") or {}
+        approval_id = str(_get_value(action_value, "approval_id") or "").strip()
+        decision = str(_get_value(action_value, "decision") or "").strip().lower()
+        operator_id = (
+            str(_get_value(event, "operator", "open_id") or "").strip()
+            or str(_get_value(event, "operator", "user_id") or "").strip()
+        )
+        if not approval_id or decision not in {"approve", "reject"}:
+            return {"toast": {"type": "warning", "content": "无法识别这个审批操作。"}}
+        with self._approval_lock:
+            pending = self._pending_approvals.get(approval_id)
+        if pending is None:
+            return {"toast": {"type": "warning", "content": "这个审批已经处理或已过期。"}}
+        if not _is_lark_approval_operator_allowed(operator_id, pending):
+            log_event(
+                "lark.approval_operator_denied",
+                approval_id=approval_id,
+                operator_id=operator_id,
+                requester_id=pending.requester_id,
+            )
+            return {"toast": {"type": "warning", "content": "只有请求人或审批白名单用户可以处理。"}}
+        with self._approval_lock:
+            self._pending_approvals.pop(approval_id, None)
+        log_event(
+            "lark.approval_decision",
+            approval_id=approval_id,
+            decision=decision,
+            operator_id=operator_id,
+            thread_id=pending.thread_id,
+        )
+        self.executor.submit(self._resume_approval, pending, decision, operator_id)
+        return {"toast": {"type": "success", "content": "已提交审批决定。"}}
 
     def _add_reaction(self, event: LarkMessageEvent) -> None:
         try:
@@ -1474,6 +1612,8 @@ class LarkWsBridge:
                         app_secret=self.app_secret,
                     ),
                 )
+                if self._handle_interrupt_result(result, events, reaction_ids, thread_id, chat_id):
+                    return
                 messages = result.get("messages", []) if isinstance(result, dict) else []
                 if messages:
                     _store_thread_history(thread_id, list(messages))
@@ -1494,6 +1634,8 @@ class LarkWsBridge:
                     "callbacks": [],
                 },
             )
+            if self._handle_interrupt_result(result, events, reaction_ids, thread_id, chat_id):
+                return
             messages = result.get("messages", []) if isinstance(result, dict) else []
             if messages:
                 _store_thread_history(thread_id, list(messages))
@@ -1526,6 +1668,108 @@ class LarkWsBridge:
                     traceback=traceback.format_exc(),
                 )
             self._finish_reactions(events, reaction_ids, LARK_ERROR_EMOJI)
+
+    def _handle_interrupt_result(
+        self,
+        result: Any,
+        events: list[LarkMessageEvent],
+        reaction_ids: list[str],
+        thread_id: str,
+        chat_id: str,
+    ) -> bool:
+        interrupts = _interrupts_from_result(result)
+        if not interrupts:
+            return False
+        approval_id = f"lark_appr_{uuid.uuid4().hex[:12]}"
+        interrupt_value = _interrupt_value(interrupts[0])
+        pending = LarkPendingApproval(
+            approval_id=approval_id,
+            thread_id=thread_id,
+            chat_id=chat_id,
+            requester_id=events[0].sender_id if events else "",
+            interrupt_value=interrupt_value,
+            message_ids=tuple(event.message_id for event in events),
+            reaction_ids=tuple(reaction_ids),
+        )
+        with self._approval_lock:
+            self._pending_approvals[approval_id] = pending
+        send_lark_approval_card(
+            chat_id,
+            approval_id,
+            interrupt_value,
+            app_id=self.app_id,
+            app_secret=self.app_secret,
+        )
+        log_event(
+            "lark.approval_requested",
+            approval_id=approval_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_ids=list(pending.message_ids),
+        )
+        return True
+
+    def _resume_approval(self, pending: LarkPendingApproval, decision: str, operator_id: str) -> None:
+        resume_decision: dict[str, Any]
+        if decision == "approve":
+            resume_decision = {"type": "approve"}
+        else:
+            resume_decision = {
+                "type": "reject",
+                "message": f"Rejected from Feishu by {operator_id or 'user'}.",
+            }
+        dummy_events = [
+            LarkMessageEvent(
+                message_id=message_id,
+                chat_id=pending.chat_id,
+                message_type="approval",
+                text="",
+            )
+            for message_id in pending.message_ids
+        ]
+        try:
+            result = self.graph.invoke(
+                Command(resume={"decisions": [resume_decision]}),
+                config={
+                    "configurable": {"thread_id": pending.thread_id},
+                    "metadata": {"source": "lark", "lark_chat_id": pending.chat_id},
+                    "tags": ["lark", "approval"],
+                    "callbacks": [],
+                },
+            )
+            if self._handle_interrupt_result(
+                result,
+                dummy_events,
+                list(pending.reaction_ids),
+                pending.thread_id,
+                pending.chat_id,
+            ):
+                return
+            messages = result.get("messages", []) if isinstance(result, dict) else []
+            if messages:
+                _store_thread_history(pending.thread_id, list(messages))
+            answer = extract_final_ai_text(result) or "审批已处理。"
+            send_lark_text(pending.chat_id, answer, app_id=self.app_id, app_secret=self.app_secret)
+            self._send_voice_reply_if_enabled(pending.chat_id, answer)
+            self._finish_reactions(dummy_events, list(pending.reaction_ids), LARK_DONE_EMOJI)
+            log_event("lark.approval_resumed", approval_id=pending.approval_id, decision=decision)
+        except Exception as exc:
+            log_event(
+                "lark.approval_resume_error",
+                approval_id=pending.approval_id,
+                error=repr(exc),
+                traceback=traceback.format_exc(),
+            )
+            try:
+                send_lark_text(
+                    pending.chat_id,
+                    f"处理飞书审批时出错：{exc}",
+                    app_id=self.app_id,
+                    app_secret=self.app_secret,
+                )
+            except Exception:
+                pass
+            self._finish_reactions(dummy_events, list(pending.reaction_ids), LARK_ERROR_EMOJI)
 
     def _send_voice_reply_if_enabled(self, chat_id: str, text: str) -> None:
         try:
@@ -1626,6 +1870,7 @@ class LarkWsBridge:
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(lambda data: self.handle_event(data))
+            .register_p2_card_action_trigger(lambda data: self.handle_card_action(data))
             .build()
         )
         log_level = lark.LogLevel.DEBUG if _bool_env("LARK_DEBUG", False) else lark.LogLevel.INFO

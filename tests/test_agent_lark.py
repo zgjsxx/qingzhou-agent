@@ -729,6 +729,116 @@ class AgentLarkTest(unittest.TestCase):
         self.assertEqual(send_text.call_args.args[:2], ("oc_run", "收到"))
         send_voice.assert_called_once_with("oc_run", "收到", app_id="app", app_secret="secret")
 
+    def test_process_merged_events_interrupt_sends_approval_card(self):
+        interrupt_value = {
+            "action_requests": [
+                {
+                    "name": "run_shell_command",
+                    "args": {"command": "Remove-Item demo.txt"},
+                    "description": "Potentially destructive file removal command.",
+                }
+            ],
+            "review_configs": [
+                {
+                    "action_name": "run_shell_command",
+                    "allowed_decisions": ["approve", "reject"],
+                }
+            ],
+        }
+        graph = SimpleNamespace(
+            invoke=lambda *_args, **_kwargs: {
+                "__interrupt__": [SimpleNamespace(value=interrupt_value, id="int_1")]
+            }
+        )
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        events = [
+            agent_lark.LarkMessageEvent(
+                message_id="om_run", chat_id="oc_run", message_type="text",
+                text="删除 demo.txt", sender_id="ou_1",
+            ),
+        ]
+
+        with (
+            patch("agent_lark.send_lark_approval_card") as send_card,
+            patch("agent_lark.send_lark_text") as send_text,
+            patch("agent_lark._stream_channel_messages_enabled", return_value=False),
+        ):
+            bridge._process_merged_events(events, ["re_1"])
+
+        send_card.assert_called_once()
+        self.assertEqual(send_card.call_args.args[0], "oc_run")
+        approval_id = send_card.call_args.args[1]
+        self.assertIn(approval_id, bridge._pending_approvals)
+        send_text.assert_not_called()
+
+    def test_handle_card_action_resumes_pending_approval(self):
+        calls = []
+
+        def invoke(payload, *_args, **_kwargs):
+            calls.append(payload)
+            return {"messages": [SimpleNamespace(type="ai", content="已执行")]}
+
+        graph = SimpleNamespace(invoke=invoke)
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        pending = agent_lark.LarkPendingApproval(
+            approval_id="appr_1",
+            thread_id="lark_oc_run",
+            chat_id="oc_run",
+            requester_id="ou_1",
+            interrupt_value={},
+            message_ids=("om_run",),
+            reaction_ids=("re_1",),
+        )
+        bridge._pending_approvals[pending.approval_id] = pending
+        card_event = {
+            "event": {
+                "operator": {"open_id": "ou_1"},
+                "action": {"value": {"approval_id": "appr_1", "decision": "approve"}},
+            }
+        }
+
+        with (
+            patch.object(bridge.executor, "submit", side_effect=lambda fn, *args: fn(*args)),
+            patch("agent_lark.send_lark_text") as send_text,
+            patch("agent_lark.send_lark_voice_reply"),
+            patch("agent_lark.delete_lark_reaction"),
+            patch("agent_lark.add_lark_reaction"),
+        ):
+            response = bridge.handle_card_action(card_event)
+
+        self.assertEqual(response["toast"]["type"], "success")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(send_text.call_args.args[:2], ("oc_run", "已执行"))
+        self.assertNotIn("appr_1", bridge._pending_approvals)
+
+    def test_handle_card_action_rejects_unauthorized_operator(self):
+        graph = SimpleNamespace(invoke=MagicMock())
+        bridge = agent_lark.LarkWsBridge(graph=graph, app_id="app", app_secret="secret")
+        pending = agent_lark.LarkPendingApproval(
+            approval_id="appr_1",
+            thread_id="lark_oc_run",
+            chat_id="oc_run",
+            requester_id="ou_requester",
+            interrupt_value={},
+            message_ids=("om_run",),
+            reaction_ids=("re_1",),
+        )
+        bridge._pending_approvals[pending.approval_id] = pending
+        card_event = {
+            "event": {
+                "operator": {"open_id": "ou_other"},
+                "action": {"value": {"approval_id": "appr_1", "decision": "approve"}},
+            }
+        }
+
+        with patch.object(bridge.executor, "submit") as submit:
+            response = bridge.handle_card_action(card_event)
+
+        self.assertEqual(response["toast"]["type"], "warning")
+        submit.assert_not_called()
+        graph.invoke.assert_not_called()
+        self.assertIn("appr_1", bridge._pending_approvals)
+
     def test_process_merged_events_file_event(self):
         """File events should download and produce text description."""
         graph = SimpleNamespace()

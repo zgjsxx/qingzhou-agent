@@ -4,6 +4,7 @@ param()
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $pidFile = Join-Path $root ".runtime\pids.json"
+$knownPorts = @(3000, 2024, 8765)
 
 function Get-ListeningProcessIds {
     param([int[]]$Ports)
@@ -33,13 +34,16 @@ if (Test-Path $pidFile) {
             @{ Name = "backend"; Id = $tracked.backendPid },
             @{ Name = "ASR server"; Id = $tracked.asrPid }
         )
+        if ($tracked.asrUrl -and "$($tracked.asrUrl)" -match ":(\d+)(?:/|$)") {
+            $knownPorts += [int]$Matches[1]
+        }
     }
     catch {
         throw "Cannot read PID file: $pidFile"
     }
 }
 
-$targets += Get-ListeningProcessIds -Ports @(3000, 2024, 8765) | ForEach-Object {
+$targets += Get-ListeningProcessIds -Ports @($knownPorts | Sort-Object -Unique) | ForEach-Object {
     $process = Get-Process -Id $_ -ErrorAction SilentlyContinue
     $name = if ($process) { "$($process.ProcessName) on qingzhou-agent port" } else { "process on qingzhou-agent port" }
     @{ Name = $name; Id = $_ }

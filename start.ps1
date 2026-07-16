@@ -19,6 +19,7 @@ $pythonExe = Join-Path $root ".venv\Scripts\python.exe"
 $nextExe = Join-Path $frontendDir "node_modules\.bin\next.CMD"
 $nextBuild = Join-Path $frontendDir ".next"
 $enableAsrServer = $WithAsr -or $WithAsrServer
+$asrPortWasProvided = $PSBoundParameters.ContainsKey("AsrPort")
 
 function Test-Port {
     param([int]$Port)
@@ -33,6 +34,52 @@ function Test-Port {
     finally {
         $client.Dispose()
     }
+}
+
+function Test-PortBindable {
+    param([int]$Port)
+
+    $listener = $null
+    try {
+        $address = [System.Net.IPAddress]::Parse("127.0.0.1")
+        $listener = [System.Net.Sockets.TcpListener]::new($address, $Port)
+        $listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($listener) {
+            $listener.Stop()
+        }
+    }
+}
+
+function Resolve-AsrPort {
+    param(
+        [Parameter(Mandatory = $true)][int]$PreferredPort,
+        [Parameter(Mandatory = $true)][bool]$Explicit
+    )
+
+    if (Test-Port $PreferredPort) {
+        throw "Port $PreferredPort is already in use. Stop the existing ASR server first."
+    }
+    if (Test-PortBindable $PreferredPort) {
+        return $PreferredPort
+    }
+    if ($Explicit) {
+        throw "Port $PreferredPort cannot be bound on 127.0.0.1. Choose another port with -AsrPort."
+    }
+
+    foreach ($candidate in 18765..18864) {
+        if ((-not (Test-Port $candidate)) -and (Test-PortBindable $candidate)) {
+            Write-Host "ASR port $PreferredPort is unavailable; using $candidate instead." -ForegroundColor Yellow
+            return $candidate
+        }
+    }
+
+    throw "No bindable ASR port found in 18765..18864. Choose another port with -AsrPort."
 }
 
 function Test-TrackedProcess {
@@ -122,8 +169,8 @@ if (Test-Port 2024) {
 if (Test-Port 3000) {
     throw "Port 3000 is already in use. Stop the existing frontend first."
 }
-if ($enableAsrServer -and (Test-Port $AsrPort)) {
-    throw "Port $AsrPort is already in use. Stop the existing ASR server first."
+if ($enableAsrServer) {
+    $AsrPort = Resolve-AsrPort -PreferredPort $AsrPort -Explicit $asrPortWasProvided
 }
 if (-not (Test-Path $pythonExe)) {
     throw "Backend environment is missing. Run .\build.ps1 first."
@@ -158,10 +205,14 @@ $env:PYTHONIOENCODING = "utf-8"
 if ($withVoiceRuntime) {
     $env:AGENT_TTS_ENABLED = "true"
     $env:AGENT_TTS_PROVIDER = "edge_tts"
+    if ($enableAsrServer) {
+        $env:QINGZHOU_ASR_URL = "http://127.0.0.1:$AsrPort"
+    }
 }
 else {
     $env:AGENT_TTS_ENABLED = $null
     $env:AGENT_TTS_PROVIDER = $null
+    $env:QINGZHOU_ASR_URL = $null
 }
 
 $asrProcess = $null
