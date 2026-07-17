@@ -40,6 +40,9 @@ MERGE_WAIT_SECONDS = max(0.0, min(float(os.getenv("LARK_MERGE_WAIT_SECONDS", "10
 QINGZHOU_AUDIO_MARKER_REGEX = re.compile(r"\[\[qingzhou-audio:(\{.*?\})\]\]", re.DOTALL)
 LOCAL_DOWNLOAD_URL_REGEX = re.compile(r'(?:https?://[^/\s<>)"\']+)?/api/local/downloads/[^\s<>)"\']+', re.IGNORECASE)
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+TEXT_FILE_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".tsv", ".log", ".json", ".yaml", ".yml"}
+WORD_FILE_SUFFIXES = {".doc", ".docx"}
+EXCEL_FILE_SUFFIXES = {".xls", ".xlsx"}
 
 _start_lock = threading.Lock()
 _started = False
@@ -544,6 +547,35 @@ def _extract_qingzhou_audio_marker_paths(text: str) -> list[Path]:
     return paths
 
 
+def _lark_file_kind(filename: str) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix in TEXT_FILE_SUFFIXES:
+        return "text"
+    if suffix in WORD_FILE_SUFFIXES:
+        return "word"
+    if suffix in EXCEL_FILE_SUFFIXES:
+        return "excel"
+    if suffix in IMAGE_SUFFIXES:
+        return "image"
+    return "file"
+
+
+def _lark_file_usage_hint(kind: str) -> str:
+    if kind == "text":
+        return "Read it as a local text file when the user asks about its contents."
+    if kind == "word":
+        return "Use Word/docx parsing tools or shell utilities to inspect the document."
+    if kind == "excel":
+        return "Use spreadsheet/xlsx parsing tools or shell utilities to inspect workbook sheets and cells."
+    if kind == "pdf":
+        return "Use PDF tools or shell utilities to inspect the document."
+    if kind == "image":
+        return "Use image-aware tools or file utilities to inspect the image."
+    return "Use file or shell utilities to inspect the local file when needed."
+
+
 def _event_to_text_fragment(event: LarkMessageEvent, app_id: str, app_secret: str) -> str:
     """Convert a single LarkMessageEvent into a text fragment for the merged prompt."""
     if event.text:
@@ -590,6 +622,16 @@ def _event_to_text_fragment(event: LarkMessageEvent, app_id: str, app_secret: st
             app_id=app_id,
             app_secret=app_secret,
         )
+        if not info.get("error"):
+            file_kind = _lark_file_kind(info.get("filename") or event.filename)
+            return (
+                f"File message:\n"
+                f"  filename: {info['filename']}\n"
+                f"  kind: {file_kind}\n"
+                f"  size: {info['size']}\n"
+                f"  path: {info['path']}\n"
+                f"  note: The file has been downloaded locally. {_lark_file_usage_hint(file_kind)}"
+            )
         if info.get("error"):
             return f"文件消息: (下载失败: {info['error']})"
         return (

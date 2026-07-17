@@ -11,10 +11,40 @@ const maxUploadBytes = 50 * 1024 * 1024;
 
 const supportedTypes = new Set([
   "application/pdf",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "image/jpeg",
   "image/png",
   "image/gif",
   "image/webp",
+]);
+
+const supportedExtensionTypes = new Map([
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".png", "image/png"],
+  [".gif", "image/gif"],
+  [".webp", "image/webp"],
+  [".pdf", "application/pdf"],
+  [".txt", "text/plain"],
+  [".md", "text/markdown"],
+  [".markdown", "text/markdown"],
+  [".csv", "text/csv"],
+  [".doc", "application/msword"],
+  [
+    ".docx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ],
+  [".xls", "application/vnd.ms-excel"],
+  [
+    ".xlsx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ],
 ]);
 
 function safeFilename(name: string) {
@@ -29,6 +59,14 @@ function safeFilename(name: string) {
   return cleaned || "upload";
 }
 
+function getSupportedMimeType(file: File) {
+  if (supportedTypes.has(file.type)) {
+    return file.type;
+  }
+  const extension = path.extname(file.name || "").toLowerCase();
+  return supportedExtensionTypes.get(extension) || "";
+}
+
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const file = formData.get("file");
@@ -36,7 +74,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "file is required" }, { status: 400 });
   }
 
-  if (!supportedTypes.has(file.type)) {
+  const mimeType = getSupportedMimeType(file);
+  if (!mimeType) {
     return NextResponse.json(
       { error: `unsupported file type: ${file.type}` },
       { status: 400 },
@@ -60,7 +99,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     uploadId,
     filename,
-    mimeType: file.type,
+    mimeType,
     size: file.size,
     path: filePath,
   });

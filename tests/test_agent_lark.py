@@ -871,6 +871,51 @@ class AgentLarkTest(unittest.TestCase):
             app_secret="secret",
         )
 
+    def test_lark_file_kind_supports_office_and_text_files(self):
+        cases = {
+            "notes.txt": "text",
+            "readme.md": "text",
+            "table.csv": "text",
+            "plan.doc": "word",
+            "plan.docx": "word",
+            "budget.xls": "excel",
+            "budget.xlsx": "excel",
+            "report.pdf": "pdf",
+        }
+
+        for filename, expected in cases.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(agent_lark._lark_file_kind(filename), expected)
+
+    def test_lark_excel_file_event_prompt_includes_local_file_hint(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_xlsx",
+            chat_id="oc_file",
+            message_type="file",
+            text="",
+            file_key="file_xlsx",
+            filename="budget.xlsx",
+            sender_id="ou_1",
+        )
+        download_info = {"path": "/tmp/budget.xlsx", "filename": "budget.xlsx", "size": "12KB"}
+
+        with patch("agent_lark._download_lark_resource", return_value=download_info) as mock_download:
+            fragment = agent_lark._event_to_text_fragment(event, "app", "secret")
+
+        mock_download.assert_called_once_with(
+            "om_xlsx",
+            "file_xlsx",
+            "files",
+            preferred_filename="budget.xlsx",
+            app_id="app",
+            app_secret="secret",
+        )
+        self.assertIn("File message", fragment)
+        self.assertIn("filename: budget.xlsx", fragment)
+        self.assertIn("kind: excel", fragment)
+        self.assertIn("path: /tmp/budget.xlsx", fragment)
+        self.assertIn("spreadsheet/xlsx parsing tools", fragment)
+
     def test_process_merged_events_audio_event_transcribes_before_invoke(self):
         captured_payloads = []
 

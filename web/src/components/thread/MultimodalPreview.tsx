@@ -3,6 +3,7 @@ import { File, X as XIcon } from "lucide-react";
 import { ContentBlock } from "@langchain/core/messages";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
+import { supportedDocumentTypes } from "@/lib/multimodal-utils";
 export interface MultimodalPreviewProps {
   block: ContentBlock.Multimodal.Data;
   removable?: boolean;
@@ -51,10 +52,14 @@ export const MultimodalPreview: React.FC<MultimodalPreviewProps> = ({
     );
   }
 
-  // PDF block
-  if (block.type === "file" && block.mimeType === "application/pdf") {
+  // Stored file block
+  if (
+    block.type === "file" &&
+    typeof block.mimeType === "string" &&
+    supportedDocumentTypes.includes(block.mimeType)
+  ) {
     const filename =
-      block.metadata?.filename || block.metadata?.name || "PDF file";
+      block.metadata?.filename || block.metadata?.name || "uploaded file";
     return (
       <div
         className={cn(
@@ -81,7 +86,7 @@ export const MultimodalPreview: React.FC<MultimodalPreviewProps> = ({
             type="button"
             className="ml-2 self-start rounded-full bg-gray-200 p-1 text-teal-700 hover:bg-gray-300"
             onClick={onRemove}
-            aria-label="Remove PDF"
+            aria-label="Remove file"
           >
             <XIcon className="h-4 w-4" />
           </button>
