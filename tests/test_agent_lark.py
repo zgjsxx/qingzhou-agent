@@ -327,6 +327,44 @@ class AgentLarkTest(unittest.TestCase):
     def test_thread_id_for_chat_is_stable_and_safe(self):
         self.assertEqual(agent_lark._thread_id_for_chat("oc abc/123"), "lark_oc_abc_123")
 
+    def test_private_thread_id_stays_chat_scoped(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_private",
+            chat_id="oc_private",
+            chat_type="p2p",
+            message_type="text",
+            text="你好",
+            sender_id="ou_1",
+        )
+
+        self.assertEqual(agent_lark._thread_id_for_event(event), "lark_oc_private")
+
+    def test_group_thread_id_defaults_to_sender_scoped(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_group",
+            chat_id="oc group/1",
+            chat_type="group",
+            message_type="text",
+            text="@bot 你好",
+            sender_id="ou user/1",
+        )
+
+        with patch.dict("os.environ", {"LARK_GROUP_THREAD_SCOPE": ""}, clear=False):
+            self.assertEqual(agent_lark._thread_id_for_event(event), "lark_oc_group_1__ou_user_1")
+
+    def test_group_thread_id_can_use_chat_scope(self):
+        event = agent_lark.LarkMessageEvent(
+            message_id="om_group",
+            chat_id="oc_group",
+            chat_type="group",
+            message_type="text",
+            text="@bot 你好",
+            sender_id="ou_1",
+        )
+
+        with patch.dict("os.environ", {"LARK_GROUP_THREAD_SCOPE": "chat"}, clear=False):
+            self.assertEqual(agent_lark._thread_id_for_event(event), "lark_oc_group")
+
     def test_extract_final_ai_text(self):
         result = {
             "messages": [
@@ -682,6 +720,50 @@ class AgentLarkTest(unittest.TestCase):
         # Event should be in the pending buffer
         buf = agent_lark._pending_buffer
         self.assertIn("oc_buf", buf._events)
+
+    def test_bridge_buffer_separates_group_senders(self):
+        """Group messages from different senders should not be merged together."""
+        bridge = agent_lark.LarkWsBridge(graph=SimpleNamespace(), app_id="app", app_secret="secret")
+        data_a = {
+            "event": {
+                "message": {
+                    "message_id": "om_a",
+                    "chat_id": "oc_group",
+                    "chat_type": "group",
+                    "message_type": "text",
+                    "content": json.dumps({"text": "@轻舟 A"}),
+                    "mentions": [{"id": {"open_id": "ou_bot"}, "name": "轻舟"}],
+                },
+                "sender": {"sender_id": {"open_id": "ou_a"}},
+            }
+        }
+        data_b = {
+            "event": {
+                "message": {
+                    "message_id": "om_b",
+                    "chat_id": "oc_group",
+                    "chat_type": "group",
+                    "message_type": "text",
+                    "content": json.dumps({"text": "@轻舟 B"}),
+                    "mentions": [{"id": {"open_id": "ou_bot"}, "name": "轻舟"}],
+                },
+                "sender": {"sender_id": {"open_id": "ou_b"}},
+            }
+        }
+
+        with (
+            patch.dict("os.environ", {"LARK_BOT_OPEN_ID": "ou_bot", "LARK_GROUP_THREAD_SCOPE": ""}, clear=False),
+            patch("agent_lark.add_lark_reaction", return_value=""),
+            patch("agent_lark._remember_seen_message", return_value=True),
+        ):
+            bridge.handle_event(data_a)
+            bridge.handle_event(data_b)
+
+        buf = agent_lark._pending_buffer
+        self.assertIn("oc_group:ou_a", buf._events)
+        self.assertIn("oc_group:ou_b", buf._events)
+        self.assertEqual([event.message_id for event in buf._events["oc_group:ou_a"]], ["om_a"])
+        self.assertEqual([event.message_id for event in buf._events["oc_group:ou_b"]], ["om_b"])
 
     def test_process_merged_events_text_command(self):
         """Slash commands in merged events should be handled."""

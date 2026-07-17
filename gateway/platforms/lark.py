@@ -85,12 +85,35 @@ class LarkMessageEvent:
     duration_ms: int = 0
 
 
+def _safe_lark_id(value: str) -> str:
+    safe_id = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", str(value or "")).strip("_")
+    return safe_id or "unknown"
+
+
+def _lark_group_thread_scope() -> str:
+    scope = (
+        os.getenv("LARK_GROUP_THREAD_SCOPE", "")
+        or os.getenv("FEISHU_GROUP_THREAD_SCOPE", "")
+        or "sender"
+    ).strip().lower()
+    if scope in {"chat", "shared"}:
+        return "chat"
+    return "sender"
+
+
+def _lark_context_key_for_event(event: LarkMessageEvent) -> str:
+    if _is_lark_group_chat(event) and _lark_group_thread_scope() == "sender" and event.sender_id:
+        return f"{event.chat_id}:{event.sender_id}"
+    return event.chat_id
+
+
 class _PendingBuffer:
-    """Buffer for merging rapid-fire Lark messages from the same chat.
+    """Buffer for merging rapid-fire Lark messages from the same context.
 
     When a user sends file+text or multiple quick messages, Lark delivers
-    them as separate events. This buffer collects them within a configurable
-    time window before submitting a single merged prompt to the LLM.
+    them as separate events. This buffer collects messages from the same
+    conversation context within a configurable time window before submitting
+    a single merged prompt to the LLM.
     """
 
     def __init__(self) -> None:
@@ -100,39 +123,39 @@ class _PendingBuffer:
         self._reaction_ids: dict[str, list[str]] = {}
 
     def add(self, event: LarkMessageEvent, reaction_id: str, on_flush: Any) -> None:
-        """Add event to buffer for its chat_id and reset the merge timer."""
-        chat_id = event.chat_id
+        """Add event to its context buffer and reset the merge timer."""
+        context_key = _lark_context_key_for_event(event)
         with self._lock:
-            self._events.setdefault(chat_id, []).append(event)
-            self._reaction_ids.setdefault(chat_id, []).append(reaction_id)
+            self._events.setdefault(context_key, []).append(event)
+            self._reaction_ids.setdefault(context_key, []).append(reaction_id)
             # Cancel existing timer
-            old_timer = self._timers.pop(chat_id, None)
+            old_timer = self._timers.pop(context_key, None)
             if old_timer is not None:
                 old_timer.cancel()
             # Start new timer
             wait = MERGE_WAIT_SECONDS if MERGE_WAIT_SECONDS > 0 else 0.05
-            timer = threading.Timer(wait, self._flush, args=[chat_id, on_flush])
+            timer = threading.Timer(wait, self._flush, args=[context_key, on_flush])
             timer.daemon = True
-            self._timers[chat_id] = timer
+            self._timers[context_key] = timer
             timer.start()
 
-    def set_reaction(self, chat_id: str, message_id: str, reaction_id: str) -> bool:
+    def set_reaction(self, context_key: str, message_id: str, reaction_id: str) -> bool:
         """Attach an asynchronously-created reaction to a buffered message."""
         with self._lock:
-            events = self._events.get(chat_id, [])
-            reaction_ids = self._reaction_ids.get(chat_id, [])
+            events = self._events.get(context_key, [])
+            reaction_ids = self._reaction_ids.get(context_key, [])
             for index, event in enumerate(events):
                 if event.message_id == message_id:
                     reaction_ids[index] = reaction_id
                     return True
         return False
 
-    def _flush(self, chat_id: str, on_flush: Any) -> None:
+    def _flush(self, context_key: str, on_flush: Any) -> None:
         """Timer expired — merge all buffered events and invoke callback."""
         with self._lock:
-            events = self._events.pop(chat_id, [])
-            reaction_ids = self._reaction_ids.pop(chat_id, [])
-            self._timers.pop(chat_id, None)
+            events = self._events.pop(context_key, [])
+            reaction_ids = self._reaction_ids.pop(context_key, [])
+            self._timers.pop(context_key, None)
         if events:
             on_flush(events, reaction_ids)
 
@@ -362,8 +385,14 @@ def _safe_event_repr(data: Any, limit: int = 1000) -> str:
 
 
 def _thread_id_for_chat(chat_id: str) -> str:
-    safe_id = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", chat_id).strip("_")
-    return f"lark_{safe_id or 'unknown'}"
+    return f"lark_{_safe_lark_id(chat_id)}"
+
+
+def _thread_id_for_event(event: LarkMessageEvent) -> str:
+    context_key = _lark_context_key_for_event(event)
+    if context_key == event.chat_id:
+        return _thread_id_for_chat(event.chat_id)
+    return f"lark_{_safe_lark_id(event.chat_id)}__{_safe_lark_id(event.sender_id)}"
 
 
 def _csv_env_values(*names: str) -> set[str]:
@@ -466,9 +495,9 @@ def _clear_thread_history(thread_id: str) -> None:
         _chat_histories.pop(thread_id, None)
 
 
-def _run_lock_for_chat(chat_id: str) -> threading.Lock:
+def _run_lock_for_context(context_key: str) -> threading.Lock:
     with _chat_run_locks_guard:
-        return _chat_run_locks.setdefault(chat_id, threading.Lock())
+        return _chat_run_locks.setdefault(context_key, threading.Lock())
 
 
 def _content_to_text(content: Any) -> str:
@@ -1569,7 +1598,8 @@ class LarkWsBridge:
         try:
             reaction_id = add_lark_reaction(event.message_id, app_id=self.app_id, app_secret=self.app_secret)
             log_event("lark.reaction_added", message_id=event.message_id, reaction_id=reaction_id)
-            if not reaction_id or _pending_buffer.set_reaction(event.chat_id, event.message_id, reaction_id):
+            context_key = _lark_context_key_for_event(event)
+            if not reaction_id or _pending_buffer.set_reaction(context_key, event.message_id, reaction_id):
                 return
 
             # reaction 返回时消息可能已经离开缓冲区，但 Agent 仍在处理中。
@@ -1592,13 +1622,15 @@ class LarkWsBridge:
         self.executor.submit(self._process_merged_events, events, reaction_ids)
 
     def _process_merged_events(self, events: list[LarkMessageEvent], reaction_ids: list[str]) -> None:
-        chat_id = events[0].chat_id
-        with _run_lock_for_chat(chat_id):
+        context_key = _lark_context_key_for_event(events[0])
+        with _run_lock_for_context(context_key):
             self._process_merged_events_locked(events, reaction_ids)
 
     def _process_merged_events_locked(self, events: list[LarkMessageEvent], reaction_ids: list[str]) -> None:
         chat_id = events[0].chat_id
         sender_id = events[0].sender_id
+        context_key = _lark_context_key_for_event(events[0])
+        thread_scope = "sender" if context_key != chat_id else "chat"
 
         # Build merged text content from all events
         fragments: list[str] = []
@@ -1610,7 +1642,7 @@ class LarkWsBridge:
 
         # Check for slash commands in the text portion
         text_only = " ".join(e.text for e in events if e.text)
-        thread_id = _thread_id_for_chat(chat_id)
+        thread_id = _thread_id_for_event(events[0])
         if text_only:
             command_result = handle_thread_slash_command(text_only, self.graph, thread_id, source="lark")
             if command_result:
@@ -1638,7 +1670,13 @@ class LarkWsBridge:
                 input_payload = {"messages": [*previous_messages, {"role": "user", "content": user_content}]}
                 run_config = {
                     "configurable": {"thread_id": thread_id},
-                    "metadata": {"source": "lark", "lark_chat_id": chat_id},
+                    "metadata": {
+                        "source": "lark",
+                        "lark_chat_id": chat_id,
+                        "lark_sender_id": sender_id,
+                        "lark_context_key": context_key,
+                        "lark_thread_scope": thread_scope,
+                    },
                     "tags": ["lark"],
                     "callbacks": [],
                 }
@@ -1671,7 +1709,13 @@ class LarkWsBridge:
                 {"messages": [*previous_messages, {"role": "user", "content": user_content}]},
                 config={
                     "configurable": {"thread_id": thread_id},
-                    "metadata": {"source": "lark", "lark_chat_id": chat_id},
+                    "metadata": {
+                        "source": "lark",
+                        "lark_chat_id": chat_id,
+                        "lark_sender_id": sender_id,
+                        "lark_context_key": context_key,
+                        "lark_thread_scope": thread_scope,
+                    },
                     "tags": ["lark"],
                     "callbacks": [],
                 },
