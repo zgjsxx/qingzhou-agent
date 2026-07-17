@@ -734,6 +734,25 @@ def _message_key(message: Any, index: int) -> str:
     return f"{index}:{message_type}:{content_preview}"
 
 
+def _is_human_message(message: Any) -> bool:
+    if isinstance(message, dict):
+        message_type = str(message.get("type") or "")
+        role = str(message.get("role") or "")
+        class_name = ""
+    else:
+        message_type = str(getattr(message, "type", "") or "")
+        role = str(getattr(message, "role", "") or "")
+        class_name = message.__class__.__name__
+    return message_type == "human" or role == "user" or class_name == "HumanMessage"
+
+
+def _last_human_message_index(messages: list[Any]) -> int:
+    for index in range(len(messages) - 1, -1, -1):
+        if _is_human_message(messages[index]):
+            return index
+    return -1
+
+
 def _stream_channel_messages_enabled() -> bool:
     return _bool_env("LARK_STREAM_ALL_MESSAGES", True)
 
@@ -746,14 +765,24 @@ def _invoke_and_forward_messages(
     previous_messages: list[Any],
     on_text: Any,
 ) -> Any:
-    """Invoke the graph and forward each newly produced AI/tool message in order."""
+    """Invoke the graph and forward only AI text produced after the current user message.
+
+    LangGraph value streams can include the full checkpoint state. If we forward
+    every AI message that is not in our short local history cache, old assistant
+    messages can be sent to Feishu again. The current turn boundary is the last
+    human/user message in each streamed state; only assistant messages after
+    that boundary are eligible for forwarding.
+    """
     sent_keys = {_message_key(message, index) for index, message in enumerate(previous_messages)}
     final_state: Any = None
 
     for state in graph.stream(input_payload, config=config, stream_mode="values"):
         final_state = state
         messages = state.get("messages", []) if isinstance(state, dict) else []
+        current_turn_start = _last_human_message_index(list(messages))
         for index, message in enumerate(messages):
+            if current_turn_start >= 0 and index <= current_turn_start:
+                continue
             key = _message_key(message, index)
             if key in sent_keys:
                 continue

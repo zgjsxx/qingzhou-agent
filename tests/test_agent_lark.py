@@ -765,6 +765,51 @@ class AgentLarkTest(unittest.TestCase):
         self.assertEqual([event.message_id for event in buf._events["oc_group:ou_a"]], ["om_a"])
         self.assertEqual([event.message_id for event in buf._events["oc_group:ou_b"]], ["om_b"])
 
+    def test_stream_forwarding_skips_checkpoint_history_before_current_user(self):
+        """Full checkpoint states must not resend old AI messages to Feishu."""
+
+        class FakeGraph:
+            def stream(self, *_args, **_kwargs):
+                old_ai_1 = SimpleNamespace(type="ai", id="old_ai_1", content="之前的回复1")
+                old_human = SimpleNamespace(type="human", id="old_human", content="之前的问题")
+                old_ai_2 = SimpleNamespace(type="ai", id="old_ai_2", content="之前的回复2")
+                current_human = SimpleNamespace(type="human", id="current_human", content="执行")
+                new_ai = SimpleNamespace(type="ai", id="new_ai", content="本轮新回复")
+                yield {"messages": [old_ai_1, old_human, old_ai_2, current_human]}
+                yield {"messages": [old_ai_1, old_human, old_ai_2, current_human, new_ai]}
+
+        sent: list[str] = []
+        result = agent_lark._invoke_and_forward_messages(
+            FakeGraph(),
+            input_payload={"messages": [{"role": "user", "content": "执行"}]},
+            config={},
+            previous_messages=[],
+            on_text=sent.append,
+        )
+
+        self.assertEqual(sent, ["本轮新回复"])
+        self.assertEqual(agent_lark.extract_final_ai_text(result), "本轮新回复")
+
+    def test_stream_forwarding_allows_multiple_ai_messages_after_current_user(self):
+        class FakeGraph:
+            def stream(self, *_args, **_kwargs):
+                current_human = SimpleNamespace(type="human", id="current_human", content="继续")
+                first_ai = SimpleNamespace(type="ai", id="first_ai", content="第一段")
+                second_ai = SimpleNamespace(type="ai", id="second_ai", content="第二段")
+                yield {"messages": [current_human, first_ai]}
+                yield {"messages": [current_human, first_ai, second_ai]}
+
+        sent: list[str] = []
+        agent_lark._invoke_and_forward_messages(
+            FakeGraph(),
+            input_payload={"messages": [{"role": "user", "content": "继续"}]},
+            config={},
+            previous_messages=[],
+            on_text=sent.append,
+        )
+
+        self.assertEqual(sent, ["第一段", "第二段"])
+
     def test_process_merged_events_text_command(self):
         """Slash commands in merged events should be handled."""
         calls = []
