@@ -20,3 +20,4 @@ config/weixin/
 .weixin/
 botpy.log*
 .runtime/
+skills/ems-*
