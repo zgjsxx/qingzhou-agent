@@ -11,7 +11,7 @@
 - 前端聊天界面：`web/src`
 
 后端通过 LangGraph Server 暴露名为 `agent` 的图，地址为
-`http://localhost:2024`。前端 Next.js 应用从 `http://localhost:3000`
+`config/xu-agent.json` 中 `server.backendPort` 指定的本地端口。前端 Next.js 应用从 `http://localhost:3000`
 连接后端。
 
 ## 模型配置
@@ -327,7 +327,7 @@ docs(agent): document git commit convention
 
 - `Ctrl+C` 可能只停止 LangGraph 包装进程，而留下 worker 或工具子进程。
 - 如果后端看起来卡住了，可以检查：
-  - 端口 `2024`
+  - `config/xu-agent.json` 中的 `server.backendPort`
   - `langgraph.exe`
   - `lcchat` 环境中的 `python.exe`
   - 高 CPU 占用的 `powershell.exe`、`cmd.exe` 或 `Robocopy.exe`

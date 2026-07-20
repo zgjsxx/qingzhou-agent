@@ -54,7 +54,7 @@ After entering these values, click `Continue`. You'll then be redirected to a ch
 You can bypass the initial setup form by setting the following environment variables:
 
 ```bash
-NEXT_PUBLIC_API_URL=http://localhost:2024
+NEXT_PUBLIC_API_URL=/api
 NEXT_PUBLIC_ASSISTANT_ID=agent
 NEXT_PUBLIC_AUTH_SCHEME=
 ```

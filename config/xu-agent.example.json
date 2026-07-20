@@ -5,6 +5,10 @@
     "apiKey": "",
     "baseUrl": ""
   },
+  "server": {
+    "backendHost": "127.0.0.1",
+    "backendPort": 12024
+  },
   "ssh": [
     {
       "host": "",

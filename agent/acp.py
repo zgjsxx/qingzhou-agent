@@ -26,9 +26,11 @@ from typing import Any, AsyncIterator, TextIO
 
 from langgraph_sdk import get_client
 
+from agent.config import config_int
+
 
 PROTOCOL_VERSION = 1
-DEFAULT_API_URL = "http://127.0.0.1:2024"
+DEFAULT_API_URL = f"http://127.0.0.1:{config_int('server', 'backendPort', 2024)}"
 DEFAULT_ASSISTANT_ID = "agent"
 
 

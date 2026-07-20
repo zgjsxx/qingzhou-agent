@@ -15,6 +15,7 @@ from typing import Any
 
 from langgraph_sdk import get_client
 
+from agent.config import config_int
 from agent.logging import log_event
 from agent.tasks import ROOT_DIR
 
@@ -22,7 +23,7 @@ CRON_DIR = ROOT_DIR / ".agent_cron"
 DEFAULT_STORAGE_PATH = CRON_DIR / "scheduled_tasks.json"
 DEFAULT_POLL_SECONDS = 30
 DEFAULT_MAX_JOBS = 50
-DEFAULT_API_URL = "http://localhost:2024"
+DEFAULT_API_URL = f"http://localhost:{config_int('server', 'backendPort', 2024)}"
 DEFAULT_ASSISTANT_ID = "agent"
 
 

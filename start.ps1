@@ -18,8 +18,37 @@ $pidFile = Join-Path $runtimeDir "pids.json"
 $pythonExe = Join-Path $root ".venv\Scripts\python.exe"
 $nextExe = Join-Path $frontendDir "node_modules\.bin\next.CMD"
 $nextBuild = Join-Path $frontendDir ".next"
+$configFile = Join-Path $root "config\xu-agent.json"
+# Do not use 2024 here: on Windows it can fall inside the system TCP
+# excluded port range (`netsh interface ipv4 show excludedportrange
+# protocol=tcp`). In that state no process is LISTENING on 2024, but bind
+# still fails and langgraph_cli silently falls back to a random port.
 $enableAsrServer = $WithAsr -or $WithAsrServer
 $asrPortWasProvided = $PSBoundParameters.ContainsKey("AsrPort")
+
+function Get-BackendPort {
+    $defaultPort = 2024
+    if (-not (Test-Path $configFile)) {
+        return $defaultPort
+    }
+    try {
+        $config = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
+        $value = $config.server.backendPort
+        if ($null -eq $value) {
+            return $defaultPort
+        }
+        $port = [int]$value
+        if ($port -lt 1 -or $port -gt 65535) {
+            throw "backendPort must be in 1..65535."
+        }
+        return $port
+    }
+    catch {
+        throw "Cannot read backend port from ${configFile}: $($_.Exception.Message)"
+    }
+}
+
+$backendPort = Get-BackendPort
 
 function Test-Port {
     param([int]$Port)
@@ -163,8 +192,11 @@ function Test-TtsDependencies {
 if (Test-TrackedProcess) {
     throw "qingzhou-agent is already running. Use .\stop.ps1 before starting it again."
 }
-if (Test-Port 2024) {
-    throw "Port 2024 is already in use. Stop the existing backend first."
+if (Test-Port $backendPort) {
+    throw "Port $backendPort is already in use. Stop the existing backend first."
+}
+if (-not (Test-PortBindable $backendPort)) {
+    throw "Port $backendPort cannot be bound on 127.0.0.1. It may be in the Windows TCP excluded port range; choose another backend port."
 }
 if (Test-Port 3000) {
     throw "Port 3000 is already in use. Stop the existing frontend first."
@@ -220,7 +252,7 @@ $asrProcess = $null
 Write-Host "Starting backend..."
 $backendProcess = Start-Process `
     -FilePath $pythonExe `
-    -ArgumentList @("-m", "langgraph_cli", "dev", "--no-reload", "--no-browser", "--host", "127.0.0.1", "--port", "2024") `
+    -ArgumentList @("-m", "langgraph_cli", "dev", "--no-reload", "--no-browser", "--host", "127.0.0.1", "--port", "$backendPort") `
     -WorkingDirectory $root `
     -WindowStyle Hidden `
     -RedirectStandardOutput (Join-Path $logDir "backend.out.log") `
@@ -240,7 +272,7 @@ $backendProcess = Start-Process `
 Write-Host "Waiting for backend readiness..."
 try {
     Wait-HttpReady `
-        -Url "http://127.0.0.1:2024/info" `
+        -Url "http://127.0.0.1:$backendPort/info" `
         -TimeoutSeconds $BackendTimeoutSeconds `
         -ServiceName "Backend" `
         -Process $backendProcess
@@ -289,7 +321,7 @@ if ($enableAsrServer) {
     Write-Host "ASR server is ready."
 }
 
-$env:LANGGRAPH_API_URL = "http://127.0.0.1:2024"
+$env:LANGGRAPH_API_URL = "http://127.0.0.1:$backendPort"
 $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:3000/api"
 $env:NEXT_PUBLIC_ASSISTANT_ID = "agent"
 if ($enableAsrServer) {

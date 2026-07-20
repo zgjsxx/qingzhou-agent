@@ -4,7 +4,31 @@ param()
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $pidFile = Join-Path $root ".runtime\pids.json"
-$knownPorts = @(3000, 2024, 8765)
+$configFile = Join-Path $root "config\xu-agent.json"
+
+function Get-BackendPort {
+    $defaultPort = 2024
+    if (-not (Test-Path $configFile)) {
+        return $defaultPort
+    }
+    try {
+        $config = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
+        $value = $config.server.backendPort
+        if ($null -eq $value) {
+            return $defaultPort
+        }
+        $port = [int]$value
+        if ($port -lt 1 -or $port -gt 65535) {
+            return $defaultPort
+        }
+        return $port
+    }
+    catch {
+        return $defaultPort
+    }
+}
+
+$knownPorts = @(3000, (Get-BackendPort), 8765)
 
 function Get-ListeningProcessIds {
     param([int[]]$Ports)

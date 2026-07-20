@@ -58,7 +58,7 @@ cp .env.example .env
 # 安装依赖
 pip install -r requirements.txt
 
-# 启动 LangGraph 开发服务器（端口 2024）
+# 启动 LangGraph 开发服务器（端口见 config/xu-agent.json 的 server.backendPort）
 langgraph dev
 ```
 

@@ -18,16 +18,13 @@ Then configure the ACP client to launch:
 D:\ai\qingzhou-agent\.venv\Scripts\python.exe D:\ai\qingzhou-agent\agent\acp.py
 ```
 
-By default the adapter connects to:
-
-```text
-http://127.0.0.1:2024
-```
+By default the adapter connects to the backend address derived from
+`config/xu-agent.json` field `server.backendPort`.
 
 Override this when needed:
 
 ```powershell
-D:\ai\qingzhou-agent\.venv\Scripts\python.exe D:\ai\qingzhou-agent\agent\acp.py --api-url http://127.0.0.1:2024 --assistant-id agent
+D:\ai\qingzhou-agent\.venv\Scripts\python.exe D:\ai\qingzhou-agent\agent\acp.py --api-url http://127.0.0.1:<backendPort> --assistant-id agent
 ```
 
 Do not `cd` into `D:\ai\qingzhou-agent` when launching from an editor. The
