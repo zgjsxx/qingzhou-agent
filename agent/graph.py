@@ -2,6 +2,7 @@
 
 import sys
 import os
+import threading
 from pathlib import Path
 
 # Make the repository root importable when LangGraph loads this file by path.
@@ -58,13 +59,21 @@ def configure_llm_provider_env() -> None:
 
 
 configure_llm_provider_env()
-if tts_enabled():
-    try:
-        print("[qingzhou-agent] warming TTS engine...", file=sys.stderr, flush=True)
-        warm_tts_engine()
-        print("[qingzhou-agent] TTS engine ready.", file=sys.stderr, flush=True)
-    except Exception as exc:  # noqa: BLE001 - optional TTS must not block backend startup.
-        print(f"[qingzhou-agent] TTS warm failed: {exc}", file=sys.stderr, flush=True)
+
+
+def _warm_tts_engine_in_background() -> None:
+    if not tts_enabled():
+        return
+
+    def run() -> None:
+        try:
+            print("[qingzhou-agent] warming TTS engine...", file=sys.stderr, flush=True)
+            warm_tts_engine()
+            print("[qingzhou-agent] TTS engine ready.", file=sys.stderr, flush=True)
+        except Exception as exc:  # noqa: BLE001 - optional TTS must not block backend startup.
+            print(f"[qingzhou-agent] TTS warm failed: {exc}", file=sys.stderr, flush=True)
+
+    threading.Thread(target=run, name="qingzhou-tts-warmup", daemon=True).start()
 
 MODEL_SPEC = f"{LLM_ADAPTER_TYPE}:{LLM_MODEL}"
 MODEL = (
@@ -114,11 +123,24 @@ def _create_agent_graph(*, checkpointer=None):
 
 
 graph = _create_agent_graph()
+_warm_tts_engine_in_background()
 
-if not QINGZHOU_CLI_MODE:
-    start_cron_scheduler()
-    start_lark_ws_bridge(_create_agent_graph(checkpointer=InMemorySaver()))
-    start_botpy_bridge(graph)
-    start_weixin_bridge(graph)
-    start_telegram_bridge(graph)
-    start_discord_bridge(graph)
+def _start_gateway_bridges_in_background() -> None:
+    if QINGZHOU_CLI_MODE:
+        return
+
+    def run() -> None:
+        try:
+            start_cron_scheduler()
+            start_lark_ws_bridge(_create_agent_graph(checkpointer=InMemorySaver()))
+            start_botpy_bridge(graph)
+            start_weixin_bridge(graph)
+            start_telegram_bridge(graph)
+            start_discord_bridge(graph)
+        except Exception as exc:  # noqa: BLE001 - optional bridges must not block backend startup.
+            print(f"[qingzhou-agent] gateway bridge startup failed: {exc}", file=sys.stderr, flush=True)
+
+    threading.Thread(target=run, name="qingzhou-gateway-startup", daemon=True).start()
+
+
+_start_gateway_bridges_in_background()

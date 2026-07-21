@@ -59,6 +59,14 @@ def _fallback_description(body: str, directory_name: str) -> str:
     return directory_name
 
 
+def _skill_manifests(skills_dir: Path) -> list[Path]:
+    """Return SKILL.md files at any depth under the skills directory."""
+    return sorted(
+        (path for path in skills_dir.rglob("SKILL.md") if path.is_file()),
+        key=lambda path: path.relative_to(skills_dir).as_posix().lower(),
+    )
+
+
 def scan_skills() -> dict[str, SkillEntry]:
     """Scan skill manifests and store metadata only, not full skill content."""
     registry: dict[str, SkillEntry] = {}
@@ -67,27 +75,21 @@ def scan_skills() -> dict[str, SkillEntry]:
         SKILL_REGISTRY.clear()
         return SKILL_REGISTRY
 
-    for child in sorted(skills_dir.iterdir(), key=lambda p: p.name.lower()):
-        if not child.is_dir():
-            continue
-
-        manifest = child / "SKILL.md"
-        if not manifest.is_file():
-            continue
-
+    for manifest in _skill_manifests(skills_dir):
+        skill_dir = manifest.parent
         try:
             raw = manifest.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
 
         meta, body = _parse_frontmatter(raw)
-        name = (meta.get("name") or child.name).strip()
+        name = (meta.get("name") or skill_dir.name).strip()
         if not name:
             continue
         description = (
             meta.get("description")
             or meta.get("when_to_use")
-            or _fallback_description(body or raw, child.name)
+            or _fallback_description(body or raw, skill_dir.name)
         ).strip()
         registry[name] = SkillEntry(name=name, description=description, path=manifest)
 

@@ -37,16 +37,33 @@ function parseSkill(raw: string, directory: string) {
   };
 }
 
+async function findSkillManifests(root: string, relative = ""): Promise<string[]> {
+  const dir = path.join(root, relative);
+  const entries = await readdir(dir, { withFileTypes: true });
+  const manifests: string[] = [];
+
+  for (const entry of entries) {
+    const entryRelative = path.join(relative, entry.name);
+    if (entry.isDirectory()) {
+      manifests.push(...await findSkillManifests(root, entryRelative));
+    } else if (entry.isFile() && entry.name === "SKILL.md") {
+      manifests.push(entryRelative);
+    }
+  }
+
+  return manifests.sort((a, b) => a.localeCompare(b));
+}
+
 export async function GET() {
   const skillsDir = resolveSkillsDir();
   try {
-    const entries = await readdir(skillsDir, { withFileTypes: true });
+    const manifests = await findSkillManifests(skillsDir);
     const skills = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+    for (const manifest of manifests) {
       try {
-        const raw = await readFile(path.join(skillsDir, entry.name, "SKILL.md"), "utf-8");
-        skills.push(parseSkill(raw, entry.name));
+        const directory = path.dirname(manifest);
+        const raw = await readFile(path.join(skillsDir, manifest), "utf-8");
+        skills.push(parseSkill(raw, directory));
       } catch {
         // Skip malformed skill folders.
       }
