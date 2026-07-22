@@ -5,7 +5,7 @@ param(
     [switch]$WithAsrServer,
     [int]$AsrPort = 8765,
     [int]$AsrTimeoutSeconds = 300,
-    [int]$BackendTimeoutSeconds = 180,
+    [int]$BackendTimeoutSeconds = 300,
     [int]$FrontendTimeoutSeconds = 30
 )
 
