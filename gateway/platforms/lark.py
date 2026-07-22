@@ -34,8 +34,12 @@ LARK_ACK_EMOJI = os.getenv("LARK_ACK_EMOJI_TYPE", "OK")
 LARK_DONE_EMOJI = os.getenv("LARK_DONE_EMOJI_TYPE", "DONE")
 LARK_ERROR_EMOJI = os.getenv("LARK_ERROR_EMOJI_TYPE", "CROSS_MARK")
 ROOT_DIR = Path(__file__).resolve().parents[2]
+RUNTIME_DIR = ROOT_DIR / ".runtime"
 LARK_UPLOAD_DIR = ROOT_DIR / ".agent_uploads" / "lark"
 LARK_TTS_DIR = ROOT_DIR / ".agent_outputs" / "lark_tts"
+DEFAULT_SEEN_MESSAGE_STORE = RUNTIME_DIR / "lark_seen_message_ids.json"
+DEFAULT_SEEN_MESSAGE_TTL_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_SEEN_MESSAGE_MAX_ENTRIES = 20_000
 MERGE_WAIT_SECONDS = max(0.0, min(float(os.getenv("LARK_MERGE_WAIT_SECONDS", "10.0")), 10.0))
 QINGZHOU_AUDIO_MARKER_REGEX = re.compile(r"\[\[qingzhou-audio:(\{.*?\})\]\]", re.DOTALL)
 LOCAL_DOWNLOAD_URL_REGEX = re.compile(r'(?:https?://[^/\s<>)"\']+)?/api/local/downloads/[^\s<>)"\']+', re.IGNORECASE)
@@ -51,6 +55,7 @@ _chat_history_lock = threading.Lock()
 _chat_run_locks: dict[str, threading.Lock] = {}
 _chat_run_locks_guard = threading.Lock()
 _seen_message_ids: dict[str, float] = {}
+_seen_messages_loaded = False
 _seen_lock = threading.Lock()
 _token_lock = threading.Lock()
 _tenant_access_token_value = ""
@@ -218,6 +223,93 @@ def _int_env(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _seen_message_store_path() -> Path:
+    configured = os.getenv("LARK_SEEN_MESSAGE_STORE", "").strip()
+    if not configured:
+        return DEFAULT_SEEN_MESSAGE_STORE
+    path = Path(configured).expanduser()
+    return path if path.is_absolute() else ROOT_DIR / path
+
+
+def _seen_message_ttl_seconds() -> int:
+    ttl = _int_env(
+        "LARK_SEEN_MESSAGE_TTL_SECONDS",
+        _int_env("LARK_DEDUP_TTL_SECONDS", DEFAULT_SEEN_MESSAGE_TTL_SECONDS),
+    )
+    return max(ttl, 1)
+
+
+def _seen_message_max_entries() -> int:
+    return max(_int_env("LARK_SEEN_MESSAGE_MAX_ENTRIES", DEFAULT_SEEN_MESSAGE_MAX_ENTRIES), 1)
+
+
+def _load_seen_messages_locked(now: float) -> bool:
+    global _seen_messages_loaded
+    if _seen_messages_loaded:
+        return False
+    _seen_messages_loaded = True
+
+    path = _seen_message_store_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, json.JSONDecodeError) as exc:
+        log_event("lark.seen_messages_load_error", path=str(path), error=repr(exc))
+        return False
+
+    if not isinstance(raw, dict):
+        log_event("lark.seen_messages_load_error", path=str(path), error="store payload is not an object")
+        return False
+
+    changed = False
+    ttl_seconds = _seen_message_ttl_seconds()
+    for message_id, seen_at in raw.items():
+        try:
+            timestamp = float(seen_at)
+        except (TypeError, ValueError):
+            changed = True
+            continue
+        if not message_id or now - timestamp > ttl_seconds:
+            changed = True
+            continue
+        _seen_message_ids[str(message_id)] = timestamp
+
+    return _prune_seen_messages_locked(now) or changed
+
+
+def _prune_seen_messages_locked(now: float) -> bool:
+    changed = False
+    ttl_seconds = _seen_message_ttl_seconds()
+    stale_ids = [key for key, seen_at in _seen_message_ids.items() if now - seen_at > ttl_seconds]
+    for key in stale_ids:
+        _seen_message_ids.pop(key, None)
+        changed = True
+
+    max_entries = _seen_message_max_entries()
+    overflow = len(_seen_message_ids) - max_entries
+    if overflow > 0:
+        oldest = sorted(_seen_message_ids.items(), key=lambda item: item[1])[:overflow]
+        for key, _seen_at in oldest:
+            _seen_message_ids.pop(key, None)
+            changed = True
+    return changed
+
+
+def _save_seen_messages_locked() -> None:
+    path = _seen_message_store_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f"{path.name}.tmp")
+        temp_path.write_text(
+            json.dumps(_seen_message_ids, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temp_path.replace(path)
+    except OSError as exc:
+        log_event("lark.seen_messages_save_error", path=str(path), error=repr(exc))
 
 
 def _get_value(source: Any, *path: str) -> Any:
@@ -468,14 +560,16 @@ def should_process_lark_event(event: LarkMessageEvent) -> bool:
 
 def _remember_seen_message(message_id: str) -> bool:
     now = time.time()
-    ttl_seconds = _int_env("LARK_DEDUP_TTL_SECONDS", 3600)
+    changed = False
     with _seen_lock:
-        stale_ids = [key for key, seen_at in _seen_message_ids.items() if now - seen_at > ttl_seconds]
-        for key in stale_ids:
-            _seen_message_ids.pop(key, None)
+        changed = _load_seen_messages_locked(now)
+        changed = _prune_seen_messages_locked(now) or changed
         if message_id in _seen_message_ids:
+            if changed:
+                _save_seen_messages_locked()
             return False
         _seen_message_ids[message_id] = now
+        _save_seen_messages_locked()
         return True
 
 

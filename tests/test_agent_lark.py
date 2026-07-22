@@ -27,6 +27,7 @@ class AgentLarkTest(unittest.TestCase):
             buf._reaction_ids.clear()
         with agent_lark._seen_lock:
             agent_lark._seen_message_ids.clear()
+            agent_lark._seen_messages_loaded = False
 
     def test_worker_pool_uses_daemon_threads(self):
         pool = agent_lark.DaemonWorkerPool(max_workers=2, thread_name_prefix="test-lark")
@@ -34,6 +35,71 @@ class AgentLarkTest(unittest.TestCase):
             self.assertTrue(all(thread.daemon for thread in pool._threads))
         finally:
             pool.shutdown(wait=True)
+
+    def test_seen_messages_persist_to_disk(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = Path(temp_dir) / "seen.json"
+            with patch.dict("os.environ", {"LARK_SEEN_MESSAGE_STORE": str(store)}, clear=False):
+                self.assertTrue(agent_lark._remember_seen_message("om_seen"))
+                self.assertFalse(agent_lark._remember_seen_message("om_seen"))
+
+                with agent_lark._seen_lock:
+                    agent_lark._seen_message_ids.clear()
+                    agent_lark._seen_messages_loaded = False
+
+                self.assertFalse(agent_lark._remember_seen_message("om_seen"))
+
+    def test_seen_messages_prune_expired_entries_on_load(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = Path(temp_dir) / "seen.json"
+            store.write_text(
+                json.dumps({"om_old": 100.0, "om_recent": 199.0}),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "LARK_SEEN_MESSAGE_STORE": str(store),
+                        "LARK_SEEN_MESSAGE_TTL_SECONDS": "50",
+                    },
+                    clear=False,
+                ),
+                patch("agent_lark.time.time", return_value=200.0),
+            ):
+                self.assertFalse(agent_lark._remember_seen_message("om_recent"))
+                self.assertTrue(agent_lark._remember_seen_message("om_new"))
+
+            saved = json.loads(store.read_text(encoding="utf-8"))
+            self.assertNotIn("om_old", saved)
+            self.assertIn("om_recent", saved)
+            self.assertIn("om_new", saved)
+
+    def test_seen_messages_save_pruned_store_for_duplicate_message(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = Path(temp_dir) / "seen.json"
+            store.write_text(
+                json.dumps({"om_old": 100.0, "om_recent": 199.0}),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "LARK_SEEN_MESSAGE_STORE": str(store),
+                        "LARK_SEEN_MESSAGE_TTL_SECONDS": "50",
+                    },
+                    clear=False,
+                ),
+                patch("agent_lark.time.time", return_value=200.0),
+            ):
+                self.assertFalse(agent_lark._remember_seen_message("om_recent"))
+
+            saved = json.loads(store.read_text(encoding="utf-8"))
+            self.assertNotIn("om_old", saved)
+            self.assertIn("om_recent", saved)
 
     def test_parse_text_message_event(self):
         data = SimpleNamespace(
