@@ -58,7 +58,7 @@ cp .env.example .env
 # 安装依赖
 pip install -r requirements.txt
 
-# 启动 LangGraph 开发服务器（端口见 config/xu-agent.json 的 server.backendPort）
+# 启动 LangGraph 开发服务器（端口见 config/qingzhou-agent.json 的 server.backendPort）
 langgraph dev
 ```
 
@@ -106,7 +106,7 @@ LLM 和 SSH 配置也可通过前端配置面板管理。
 
 - **新增工具**：在 `tools/registry.py` 中定义，在 `agent/graph.py` 中导入
 - **新增技能**：创建 `skills/<名称>/SKILL.md`（含 YAML frontmatter）
-- **新增 MCP 服务器**：在 `config/xu-agent.json` 的 `mcp` 字段中配置
+- **新增 MCP 服务器**：在 `config/qingzhou-agent.json` 的 `mcp` 字段中配置
 - **切换模型**：设置 `LLM_ADAPTER_TYPE`（anthropic/openai）和 `LLM_MODEL`
 
 # 可选 Playwright 浏览器工具

@@ -50,7 +50,6 @@ BLOCKED_FILE_NAMES = {
     ".pypirc",
 }
 BLOCKED_RELATIVE_FILES = {
-    Path("config") / "xu-agent.json",
     Path("config") / "qingzhou-agent.json",
 }
 TEXT_EXTENSIONS = {

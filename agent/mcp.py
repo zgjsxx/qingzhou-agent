@@ -67,7 +67,7 @@ def _candidate_config_paths() -> list[Path]:
 def _load_config_file() -> tuple[Path | None, dict[str, Any]]:
     """Load MCP config.
 
-    The normal source is the ``mcp`` section in ``config/xu-agent.json``. The
+    The normal source is the ``mcp`` section in ``config/qingzhou-agent.json``. The
     ``AGENT_MCP_CONFIG`` environment variable remains as an explicit debug/test
     override and is not used as an automatic compatibility fallback.
     """

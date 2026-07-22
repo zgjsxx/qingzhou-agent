@@ -19,7 +19,7 @@ D:\ai\qingzhou-agent\.venv\Scripts\python.exe D:\ai\qingzhou-agent\agent\acp.py
 ```
 
 By default the adapter connects to the backend address derived from
-`config/xu-agent.json` field `server.backendPort`.
+`config/qingzhou-agent.json` field `server.backendPort`.
 
 Override this when needed:
 

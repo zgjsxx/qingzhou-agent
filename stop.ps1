@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $pidFile = Join-Path $root ".runtime\pids.json"
-$configFile = Join-Path $root "config\xu-agent.json"
+$configFile = Join-Path $root "config\qingzhou-agent.json"
 
 function Get-BackendPort {
     $defaultPort = 2024

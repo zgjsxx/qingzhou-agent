@@ -137,7 +137,7 @@ class McpToolTest(unittest.TestCase):
     def test_load_http_mcp_tool_from_unified_config(self):
         url = f"http://127.0.0.1:{self.server.server_port}/mcp"
         with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "xu-agent.json"
+            config_path = Path(tmpdir) / "qingzhou-agent.json"
             config_path.write_text(
                 json.dumps(
                     {

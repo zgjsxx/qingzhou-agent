@@ -18,7 +18,7 @@ $pidFile = Join-Path $runtimeDir "pids.json"
 $pythonExe = Join-Path $root ".venv\Scripts\python.exe"
 $nextExe = Join-Path $frontendDir "node_modules\.bin\next.CMD"
 $nextBuild = Join-Path $frontendDir ".next"
-$configFile = Join-Path $root "config\xu-agent.json"
+$configFile = Join-Path $root "config\qingzhou-agent.json"
 # Do not use 2024 here: on Windows it can fall inside the system TCP
 # excluded port range (`netsh interface ipv4 show excludedportrange
 # protocol=tcp`). In that state no process is LISTENING on 2024, but bind

@@ -4,7 +4,7 @@ import path from "node:path";
 
 const repoRoot = path.resolve(process.cwd(), "..");
 const configDir = path.join(repoRoot, "config");
-const configPath = path.join(configDir, "xu-agent.json");
+const configPath = path.join(configDir, "qingzhou-agent.json");
 
 const defaultHost = {
   host: "",
