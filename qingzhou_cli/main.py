@@ -114,7 +114,7 @@ def _load_graph() -> Any:
     os.environ["QINGZHOU_CLI"] = "1"
     from agent.graph import graph
 
-    return graph
+    return graph() if callable(graph) else graph
 
 
 def _print_banner(thread_id: str) -> None:
