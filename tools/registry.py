@@ -420,6 +420,47 @@ def _run_shell_process(
         return None, stdout, stderr, True
 
 
+def _read_ssh_command_output(stdout_chan, stderr_chan, timeout: int) -> tuple[int | None, str, str, bool]:
+    """Read Paramiko command output without blocking past the requested timeout."""
+    channel = stdout_chan.channel
+    deadline = time.monotonic() + timeout
+    stdout_parts: list[bytes] = []
+    stderr_parts: list[bytes] = []
+
+    while True:
+        try:
+            while channel.recv_ready():
+                stdout_parts.append(channel.recv(32768))
+            while channel.recv_stderr_ready():
+                stderr_parts.append(channel.recv_stderr(32768))
+        except (OSError, socket.timeout):
+            break
+
+        if channel.exit_status_ready():
+            try:
+                exit_status = channel.recv_exit_status()
+            except OSError:
+                exit_status = None
+            stdout = b"".join(stdout_parts).decode("utf-8", errors="replace")
+            stderr = b"".join(stderr_parts).decode("utf-8", errors="replace")
+            return exit_status, stdout, stderr, False
+
+        if time.monotonic() >= deadline:
+            try:
+                channel.close()
+            except OSError:
+                pass
+            stdout = b"".join(stdout_parts).decode("utf-8", errors="replace")
+            stderr = b"".join(stderr_parts).decode("utf-8", errors="replace")
+            return None, stdout, stderr, True
+
+        time.sleep(0.1)
+
+    stdout = b"".join(stdout_parts).decode("utf-8", errors="replace")
+    stderr = b"".join(stderr_parts).decode("utf-8", errors="replace")
+    return None, stdout, stderr, True
+
+
 
 def _run_shell_process_streaming(
     argv: list[str],
@@ -1830,23 +1871,18 @@ def run_ssh_command(
 
     try:
         stdin_chan, stdout_chan, stderr_chan = client.exec_command(command, timeout=timeout)
-        stdout_chan.channel.settimeout(timeout)
-        try:
-            stdout = stdout_chan.read().decode("utf-8", errors="replace")
-            stderr = stderr_chan.read().decode("utf-8", errors="replace")
-        except socket.timeout:
+        exit_status, stdout, stderr, timed_out = _read_ssh_command_output(stdout_chan, stderr_chan, timeout)
+        if timed_out:
             output = (
                 f"ssh_host: {resolved_host}\n"
                 f"ssh_user: {resolved_user or '(default)'}\n"
                 f"ssh_port: {resolved_port}\n"
                 f"timeout_seconds: {timeout}\n"
-                "status: timed out\n\n"
-                f"stdout:\n{stdout_chan.read().decode('utf-8', errors='replace') if stdout_chan.channel.recv_ready() else '(partial)'}\n\n"
-                f"stderr:\n{stderr_chan.read().decode('utf-8', errors='replace') if stderr_chan.channel.recv_stderr_ready() else '(partial)'}"
+                "status: timed out; SSH channel closed\n\n"
+                f"stdout:\n{stdout or '(partial output unavailable)'}\n\n"
+                f"stderr:\n{stderr or '(partial output unavailable)'}"
             )
             return _truncate(output, max(max_output_chars, 1000))
-
-        exit_status = stdout_chan.channel.recv_exit_status()
 
         output = (
             f"ssh_host: {resolved_host}\n"

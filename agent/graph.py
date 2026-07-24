@@ -26,6 +26,7 @@ from agent.memory import AgentMemoryMiddleware
 from agent.mcp import load_mcp_tools
 from agent.permissions import AgentPermissionMiddleware
 from agent.prompt import build_prompt_context, get_system_prompt
+from agent.response_guard import AgentResponseGuardMiddleware
 from agent.llm_config import configure_provider_env, provider_model_kwargs
 from agent.skills import skill_catalog_for_prompt
 from agent.tts import tts_enabled, warm_tts_engine
@@ -88,6 +89,7 @@ middleware = [
     AgentContextReferenceMiddleware(),
     AgentContextCompactMiddleware(),
     AgentPermissionMiddleware(),
+    AgentResponseGuardMiddleware(),
 ]
 
 # Keep interaction logging opt-in so normal chat requests do not create JSONL files.
